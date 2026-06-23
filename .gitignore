@@ -1,0 +1,45 @@
+# === 秘密情報（絶対にコミットしない） ===
+env.sh
+.env
+.env.*
+.envrc
+*.pem
+*.key
+id_rsa*
+clasprc.json
+# サービスアカウント鍵・各種クレデンシャル JSON
+*-key.json
+*_key.json
+service-account*.json
+*serviceaccount*.json
+credentials.json
+gcloud-key.json
+# gcloud / クラウド資格情報のローカルキャッシュ
+.config/gcloud/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# === ビルド成果物 ===
+dist/
+build/
+
+# === OS / エディタ ===
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

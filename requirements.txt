@@ -1,0 +1,23 @@
+# RunGuard 依存（Python 3.12）
+# バージョンは 2026-06-23 時点で PyPI 確認済み。最終ロックは Phase 7 で行う。
+
+# --- Google Cloud AI（ハッカソン必須） ---
+google-adk>=2.3.0              # Agent Development Kit
+google-genai>=2.9.0           # Gemini SDK（Vertex AI / 開発API 両対応, requires Python>=3.10）
+
+# --- Google Cloud 操作・観測 ---
+google-cloud-run              # Cloud Run Admin API v2（リビジョン/トラフィック操作）
+google-cloud-logging>=3.0.0   # Cloud Logging（エラーログ取得）
+google-cloud-monitoring>=2.0.0  # Cloud Monitoring（メトリクス取得）
+
+# --- 永続化 ---
+google-cloud-firestore>=2.0.0  # インシデント記録・プレイブック
+
+# --- Web / API ---
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.6.0
+
+# --- ユーティリティ ---
+httpx>=0.27.0                 # escalation（GitHub/Slack webhook, 任意）
+PyYAML>=6.0                   # eval/incidents.yaml
