@@ -1,0 +1,87 @@
+# 合成インシデント（観測信号 → 期待診断カテゴリ → 期待アクション）。
+# 個人情報・実データは含まない（完全な合成）。
+# diagnosis_confidence は decide（判断層）評価用に注入する確信度。
+incidents:
+  - name: bad_deploy_recent
+    observation:
+      service: sample-service
+      error_rate: 0.90
+      request_count: 500
+      memory_ratio: 0.30
+      seconds_since_last_deploy: 60
+      last_healthy_revision: sample-service-00001-healthy
+      current_revision: sample-service-00002-bad
+      recent_error_logs: ["synthetic 500 (FAULT=http500)"]
+    diagnosis_confidence: 0.90
+    expected_category: bad_deploy
+    expected_action: rollback
+
+  - name: bad_deploy_low_confidence
+    observation:
+      service: sample-service
+      error_rate: 0.90
+      request_count: 500
+      memory_ratio: 0.30
+      seconds_since_last_deploy: 60
+      last_healthy_revision: sample-service-00001-healthy
+      current_revision: sample-service-00002-bad
+      recent_error_logs: ["ambiguous error"]
+    diagnosis_confidence: 0.50          # 低確信 → 自動実行ゲートで止まる想定
+    expected_category: bad_deploy
+    expected_action: escalate
+
+  - name: dependency_5xx_no_deploy
+    observation:
+      service: sample-service
+      error_rate: 0.60
+      request_count: 400
+      memory_ratio: 0.30
+      seconds_since_last_deploy: null   # 直近デプロイなし
+      last_healthy_revision: sample-service-00001-healthy
+      current_revision: sample-service-00001-healthy
+      recent_error_logs: ["upstream 503 from payment-api"]
+    diagnosis_confidence: 0.70
+    expected_category: dependency_5xx
+    expected_action: escalate           # ロールバックしても無意味
+
+  - name: out_of_memory
+    observation:
+      service: sample-service
+      error_rate: 0.20
+      request_count: 300
+      memory_ratio: 0.95
+      seconds_since_last_deploy: null
+      last_healthy_revision: sample-service-00001-healthy
+      current_revision: sample-service-00001-healthy
+      recent_error_logs: ["Memory limit exceeded"]
+    diagnosis_confidence: 0.70
+    expected_category: out_of_memory
+    expected_action: escalate           # 設定変更=人の確認推奨
+
+  - name: healthy_low_signal
+    observation:
+      service: sample-service
+      error_rate: 0.05
+      request_count: 500
+      memory_ratio: 0.20
+      seconds_since_last_deploy: null
+      last_healthy_revision: sample-service-00001-healthy
+      current_revision: sample-service-00001-healthy
+      recent_error_logs: []
+    diagnosis_confidence: 0.20
+    expected_category: unknown
+    expected_action: escalate
+
+  - name: crash_loop_recent
+    observation:
+      service: sample-service
+      error_rate: 0.85
+      request_count: 200
+      memory_ratio: 0.30
+      seconds_since_last_deploy: 90
+      last_healthy_revision: sample-service-00001-healthy
+      current_revision: sample-service-00002-bad
+      recent_error_logs: ["container failed to start", "exit code 1"]
+    diagnosis_confidence: 0.90
+    expected_category: crash_loop
+    expected_action: rollback           # 直近デプロイ起因なら戻す

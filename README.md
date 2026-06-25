@@ -64,7 +64,7 @@ uvicorn agent.main:app --port 8080
 - [x] Phase 3 — decide + act + verify（dry-run/確信度ゲート/allowlist/ループ保護を検証）
 - [x] Phase 4 — loop + learn + ADK 配線（in-memory ストアで検証 / Firestore は接続後）
 - [x] Phase 5 — ダッシュボード + オフライン sim デモ（uvicorn で E2E 動作確認）
-- [ ] Phase 6 — eval + CI
+- [x] Phase 6 — eval + CI（hermetic・正診率/正アクション率/誤動作率/想定MTTR を算出、GitHub Actions）
 - [ ] Phase 7 — デプロイ + ドキュメント（GCP 接続後）
 
 ## 注意
