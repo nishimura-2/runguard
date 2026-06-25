@@ -39,6 +39,7 @@ class LoopDeps:
     sleep: Callable[[int], None] = lambda s: None       # verify 待ち（テストでは no-op）
     now: Callable[[], str] = _now_iso
     new_id: Callable[[], str] = _new_id
+    elastic: Optional[object] = None        # ElasticStore 互換（任意）。類似検索＋蓄積。
 
 
 def run_cycle(service: str, deps: LoopDeps) -> Optional[Incident]:
@@ -50,7 +51,12 @@ def run_cycle(service: str, deps: LoopDeps) -> Optional[Incident]:
         deps.store.mark_healthy(service)
         return None
 
-    diagnosis = diagnose(obs, deps.llm, deps.store.playbook_context())
+    context = deps.store.playbook_context()
+    if deps.elastic is not None:
+        extra = deps.elastic.similar_incidents_context(obs)
+        if extra:
+            context = (context + "\n" + extra).strip()
+    diagnosis = diagnose(obs, deps.llm, context)
     decision = decide(diagnosis, obs, cfg)
 
     now = deps.now()
@@ -86,4 +92,6 @@ def run_cycle(service: str, deps: LoopDeps) -> Optional[Incident]:
     )
     deps.store.save_incident(incident)
     deps.store.update_playbook(diagnosis, decision, outcome)
+    if deps.elastic is not None:
+        deps.elastic.index_incident(incident)
     return incident

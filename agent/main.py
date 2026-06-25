@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 
 from agent.actions import execute
 from agent.config import config as cfg
+from agent.elastic_store import make_elastic_store
 from agent.gemini_client import select_llm
 from agent.learn import InMemoryStore
 from agent.loop import LoopDeps, run_cycle
@@ -26,6 +27,7 @@ _service = cfg.target_services[0] if cfg.target_services else "sample-service"
 SIM = SimEnvironment(service=_service)
 STORE = InMemoryStore()
 LLM = select_llm(cfg)
+ELASTIC = make_elastic_store(cfg)        # USE_ELASTIC 時のみ。類似検索＋インシデント蓄積。
 # sim は実 GCP 副作用がないため dry_run を無効化（安全。allowlist/確信度/ループ保護は有効のまま）。
 SIM_CFG = replace(cfg, dry_run=False)
 
@@ -38,6 +40,7 @@ def _deps() -> LoopDeps:
         cfg=SIM_CFG,
         executor=lambda d, c, **kw: execute(d, c, rollback_fn=SIM.apply_rollback, **kw),
         sleep=lambda s: None,
+        elastic=ELASTIC,
     )
 
 
@@ -66,6 +69,7 @@ def api_state():
             "auto_act_threshold": SIM_CFG.auto_act_threshold,
             "error_rate_threshold": SIM_CFG.error_rate_threshold,
             "llm": type(LLM).__name__,
+            "elastic": ELASTIC is not None,
         },
     }
 

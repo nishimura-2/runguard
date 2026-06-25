@@ -15,6 +15,6 @@ jobs:
       # hermetic: GCP/Gemini 不要。eval は pydantic + pyyaml だけで動く。
       - run: pip install pydantic pyyaml
       - name: unit tests (hermetic subset)
-        run: python -m unittest tests.test_diagnose tests.test_decide tests.test_loop
+        run: python -m unittest tests.test_diagnose tests.test_decide tests.test_loop tests.test_elastic
       - name: eval
         run: python eval/run_eval.py

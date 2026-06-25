@@ -100,6 +100,12 @@ class Config:
     # --- /api/tick 保護（任意） ---
     scheduler_token: str = field(default_factory=lambda: _get("SCHEDULER_TOKEN"))
 
+    # --- Elastic（任意・過去インシデントの類似検索） ---
+    use_elastic: bool = field(default_factory=lambda: _get_bool("USE_ELASTIC", False))
+    elastic_endpoint: str = field(default_factory=lambda: _get("ELASTIC_ENDPOINT"))
+    elastic_api_key: str = field(default_factory=lambda: _get("ELASTIC_API_KEY"))
+    elastic_index: str = field(default_factory=lambda: _get("ELASTIC_INDEX", "runguard-incidents"))
+
     def is_target_allowed(self, service: str) -> bool:
         """allowlist 判定。自分自身（agent_service）は常に除外する（自己操作防止）。"""
         if not service or service == self.agent_service:
@@ -121,6 +127,8 @@ class Config:
             problems.append("Vertex 経路では GOOGLE_CLOUD_PROJECT（または PROJECT_ID）が必要です。")
         if self.store_backend not in ("firestore", "gcs"):
             problems.append("STORE_BACKEND は 'firestore' か 'gcs' を指定してください。")
+        if self.use_elastic and not (self.elastic_endpoint and self.elastic_api_key):
+            problems.append("USE_ELASTIC=1 では ELASTIC_ENDPOINT と ELASTIC_API_KEY が必要です。")
         return problems
 
 
@@ -136,7 +144,7 @@ if __name__ == "__main__":
     c = load_config()
     print("RunGuard config:")
     for key, value in c.__dict__.items():
-        if key == "scheduler_token" and value:
+        if key in ("scheduler_token", "elastic_api_key") and value:
             value = "***set***"
         print(f"  {key} = {value!r}")
     issues = c.validate()
