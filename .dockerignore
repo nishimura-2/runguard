@@ -1,0 +1,20 @@
+# 秘密情報・不要物をイメージに含めない
+env.sh
+.env
+.env.*
+.envrc
+*.pem
+*.key
+*-key.json
+*serviceaccount*.json
+credentials.json
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.pyc
+tests/
+eval/
+.pytest_cache/
+.mypy_cache/
