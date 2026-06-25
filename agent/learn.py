@@ -78,6 +78,12 @@ class InMemoryStore:
         self._action_count[service] = 0
         self._last_action_at.pop(service, None)
 
+    def clear(self) -> None:
+        self.incidents.clear()
+        self.playbook.clear()
+        self._action_count.clear()
+        self._last_action_at.clear()
+
 
 class FirestoreStore:
     """Firestore 永続化（ライブ）。実接続の最終確認は GCP 接続後。"""

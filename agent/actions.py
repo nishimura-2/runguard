@@ -52,6 +52,7 @@ def execute(
     *,
     actions_taken_this_incident: int = 0,
     seconds_since_last_action: Optional[int] = None,
+    rollback_fn=None,
 ) -> ActionResult:
     if decision.action == ActionType.escalate:
         return ActionResult(
@@ -104,10 +105,10 @@ def execute(
             skipped_reason="loop_guard",
         )
 
-    return _rollback(decision, cfg)
+    return _rollback(decision, cfg, rollback_fn)
 
 
-def _rollback(decision: Decision, cfg: Config) -> ActionResult:
+def _rollback(decision: Decision, cfg: Config, rollback_fn=None) -> ActionResult:
     service = decision.target_service
     revision = decision.target_revision
     if cfg.dry_run:
@@ -116,7 +117,7 @@ def _rollback(decision: Decision, cfg: Config) -> ActionResult:
             target_service=service, target_revision=revision,
             message=f"DRY_RUN: {service} のトラフィックを {revision} へ 100% 戻す（意図のみ）。",
         )
-    _apply_rollback_live(cfg, service, revision)
+    (rollback_fn or _apply_rollback_live)(cfg, service, revision)
     return ActionResult(
         action=ActionType.rollback, executed=True, dry_run=False,
         target_service=service, target_revision=revision,

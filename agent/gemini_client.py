@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Optional, Protocol, Type
 
 from pydantic import BaseModel
@@ -68,3 +69,52 @@ class GeminiClient:
 
 def make_llm_client(cfg: Config = default_config) -> LLMClient:
     return GeminiClient(cfg)
+
+
+def _extract_float(text: str, pattern: str):
+    m = re.search(pattern, text)
+    return float(m.group(1)) if m else None
+
+
+def _extract_int(text: str, pattern: str):
+    m = re.search(pattern, text)
+    return int(m.group(1)) if m else None
+
+
+class RuleBasedLLM:
+    """オフライン/フォールバック用の規則ベース診断（Gemini 不要）。
+
+    diagnose.build_prompt が出力するテキストから主要数値を読み、決め打ちで Diagnosis を返す。
+    GCP/Gemini 未接続のローカルデモや、API エラー時のフォールバックに使う。
+    """
+
+    def generate_structured(self, *, prompt, schema, system_instruction=None):
+        er = _extract_float(prompt, r"error_rate \(5xx\):\s*([0-9.]+)") or 0.0
+        mem = _extract_float(prompt, r"memory_ratio:\s*([0-9.]+)") or 0.0
+        secs = _extract_int(prompt, r"\((\d+) 秒前")
+        recent_deploy = secs is not None and secs <= 600
+        if er >= 0.3 and recent_deploy:
+            return schema(category="bad_deploy", confidence=0.9,
+                          reasoning="エラー急増がデプロイ直後（規則ベース）。",
+                          recommended_action="rollback", evidence_log_lines=[])
+        if mem >= 0.85:
+            return schema(category="out_of_memory", confidence=0.7,
+                          reasoning="メモリ使用率が高い（規則ベース）。",
+                          recommended_action="escalate")
+        if er >= 0.3:
+            return schema(category="dependency_5xx", confidence=0.6,
+                          reasoning="デプロイ相関のない 5xx（規則ベース）。",
+                          recommended_action="escalate")
+        return schema(category="unknown", confidence=0.2,
+                      reasoning="判断材料不足（規則ベース）。",
+                      recommended_action="escalate")
+
+
+def select_llm(cfg: Config = default_config) -> LLMClient:
+    """Gemini が使える設定なら GeminiClient、さもなくば RuleBasedLLM（オフライン）。"""
+    import os
+    configured = (
+        (cfg.use_vertexai and bool(cfg.google_cloud_project))
+        or (not cfg.use_vertexai and bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")))
+    )
+    return GeminiClient(cfg) if configured else RuleBasedLLM()
