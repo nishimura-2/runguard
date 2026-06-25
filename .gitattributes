@@ -1,0 +1,10 @@
+# テキストは LF に正規化（Linux / Cloud Run / CI の一貫性のため）
+* text=auto eol=lf
+
+# バイナリは変換しない
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
