@@ -1,73 +1,79 @@
-"""adk_app — ADK の LlmAgent に各ステップを FunctionTool として配線する。
+"""adk_app — ADK の LlmAgent に観測/ロールバックのツールを配線し、実走させる（必須技術 ADK）。
 
-- 監視サイクルの確定的実行は loop.run_cycle（/api/tick から）が担う。
-- 本モジュールは「ADK エージェントとしての対話的オーケストレーション」を提供し、
-  ハッカソン必須要件（ADK + Gemini）を満たす。
-- ADK / google-genai は遅延 import（未インストールでも本モジュールの import は通る）。
-  ADK + Gemini のライブ実行確認は GCP / Vertex 接続後に行う。
+- build_agent(cfg, backend): backend（Sim/Real）に束ねたツールを持つ LlmAgent を返す。
+- run_agent(cfg, backend, message): ADK の Runner で in-process 実行し、最終応答とツール呼び出し履歴を返す（async）。
+- ADK / google-genai は遅延 import（hermetic テスト・sim デプロイを壊さない）。
+- 監視サイクルの確定実行は loop.run_cycle（/api/tick）。本モジュールは LLM 主導の対話的オーケストレーション。
 """
 from __future__ import annotations
 
 from agent.config import Config
-from agent.config import config as default_config
 
 AGENT_INSTRUCTION = (
-    "You are RunGuard, an on-call SRE agent for Cloud Run services. "
-    "Use the tools to observe a target service, diagnose anomalies (treat an error spike "
-    "shortly after a new deployment as a bad deployment), decide a SAFE action under the "
-    "confidence gate and allowlist (rollback is reversible and preferred), act, verify "
-    "recovery, then record the incident. Never act on services outside the allowlist or on "
-    "yourself (runguard-agent)."
+    "あなたは Cloud Run の当直 SRE エージェント『RunGuard』です。"
+    "まず observe_service でサービスの健康状態（5xx 率・現/正常リビジョン・デプロイ経過秒・エラーログ）を確認し、"
+    "エラー急増が新リビジョンのデプロイ直後に始まっていれば『悪いデプロイ』と判断して、"
+    "rollback_service で正常リビジョン（観測結果の last_healthy_revision）へロールバックしてください。"
+    "ロールバック後はもう一度 observe_service で復旧を確認すること。"
+    "allowlist 外のサービスや自分自身は操作しないこと。最終回答は日本語で簡潔に。"
 )
 
 
-def build_agent(cfg: Config = default_config):
-    """ADK の LlmAgent を構築して返す（ADK は遅延 import）。"""
+def build_agent(cfg: Config, backend):
+    """backend（Sim/Real）に束ねたツールを持つ LlmAgent を構築する（ADK は遅延 import）。"""
     from google.adk.agents import LlmAgent
+
+    from agent.actions import execute
+    from agent.models import ActionType, Decision
+
+    def observe_service(service: str) -> dict:
+        """指定した Cloud Run サービスの現在の健康状態を観測して返す。
+
+        Args:
+            service: 監視対象のサービス名。
+        """
+        return backend.observe(service).model_dump()
+
+    def rollback_service(service: str, to_revision: str) -> dict:
+        """サービスのトラフィックを正常リビジョンへ 100% 戻す（ロールバック）。allowlist 外や自分自身は実行されない。
+
+        Args:
+            service: 対象の Cloud Run サービス名。
+            to_revision: 戻し先の正常リビジョン名（観測結果の last_healthy_revision）。
+        """
+        decision = Decision(action=ActionType.rollback, target_service=service,
+                            target_revision=to_revision, requires_human=False, dry_run=cfg.dry_run)
+        return execute(decision, cfg, rollback_fn=backend.apply_rollback).model_dump()
 
     return LlmAgent(
         name="runguard",
         model=cfg.gemini_model,
-        description="Cloud Run on-call SRE agent (observe→diagnose→decide→act→verify→learn).",
+        description="Cloud Run 当直 SRE（観測→診断→必要ならロールバック）。",
         instruction=AGENT_INSTRUCTION,
-        tools=_build_tools(cfg),
+        tools=[observe_service, rollback_service],
     )
 
 
-def _build_tools(cfg: Config):
-    """各ステップを ADK ツール関数として公開する（素の関数は ADK が FunctionTool 化）。"""
-    from agent.actions import execute as _execute
-    from agent.decide import decide as _decide
-    from agent.diagnose import diagnose as _diagnose
-    from agent.gemini_client import make_llm_client
-    from agent.models import Decision, Diagnosis, Observation
-    from agent.observe import build_observation
-    from agent.verify import build_post_action_observation
+async def run_agent(cfg: Config, backend, message: str) -> dict:
+    """ADK の Runner で LlmAgent を1回実行し、最終応答とツール呼び出し履歴を返す。"""
+    import uuid
 
-    _llm = make_llm_client(cfg)
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.genai import types
 
-    def observe_service(service: str) -> dict:
-        """指定 Cloud Run サービスのメトリクス/ログ/デプロイ時刻を観測する。"""
-        return build_observation(service, cfg).model_dump()
+    agent_obj = build_agent(cfg, backend)
+    session_service = InMemorySessionService()
+    runner = Runner(agent=agent_obj, app_name="runguard", session_service=session_service)
+    sid = uuid.uuid4().hex
+    await session_service.create_session(app_name="runguard", user_id="dashboard", session_id=sid)
+    new_message = types.Content(role="user", parts=[types.Part(text=message)])
 
-    def diagnose_observation(observation: dict) -> dict:
-        """観測から根本原因を診断する（デプロイ直後の急増=悪いデプロイを最重視）。"""
-        return _diagnose(Observation.model_validate(observation), _llm).model_dump()
-
-    def decide_action(diagnosis: dict, observation: dict) -> dict:
-        """診断から安全なアクションを決める（確信度ゲート/allowlist）。"""
-        return _decide(
-            Diagnosis.model_validate(diagnosis),
-            Observation.model_validate(observation),
-            cfg,
-        ).model_dump()
-
-    def act(decision: dict) -> dict:
-        """決定を実行する（ロールバック等。DRY_RUN/ループ保護/自己除外つき）。"""
-        return _execute(Decision.model_validate(decision), cfg).model_dump()
-
-    def verify_recovery(service: str) -> dict:
-        """アクション後に再観測してエラー率が戻ったか確認する。"""
-        return build_post_action_observation(service, cfg).model_dump()
-
-    return [observe_service, diagnose_observation, decide_action, act, verify_recovery]
+    steps = []
+    final = None
+    async for event in runner.run_async(user_id="dashboard", session_id=sid, new_message=new_message):
+        for fc in (event.get_function_calls() or []):
+            steps.append({"tool": fc.name, "args": {k: str(v) for k, v in dict(fc.args).items()}})
+        if event.is_final_response() and event.content and event.content.parts:
+            final = event.content.parts[0].text
+    return {"final": final, "steps": steps}

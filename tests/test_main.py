@@ -30,22 +30,22 @@ class TestApi(unittest.TestCase):
 
     def test_initial_state_healthy(self):
         s = self.c.get("/api/state").json()
-        self.assertFalse(s["sim"]["injected"])
-        self.assertEqual(s["sim"]["error_rate"], 0.0)
+        self.assertFalse(s["backend"]["injected"])
+        self.assertEqual(s["backend"]["error_rate"], 0.0)
         self.assertEqual(s["config"]["llm"], "RuleBasedLLM")  # オフライン
 
     def test_inject_then_tick_recovers(self):
         self.c.post("/api/inject")
         s = self.c.get("/api/state").json()
-        self.assertTrue(s["sim"]["injected"])
-        self.assertGreater(s["sim"]["error_rate"], 0.1)
+        self.assertTrue(s["backend"]["injected"])
+        self.assertGreater(s["backend"]["error_rate"], 0.1)
 
         t = self.c.post("/api/tick").json()
         self.assertIsNotNone(t["incident"])
         self.assertEqual(t["incident"]["diagnosis"]["category"], "bad_deploy")
         self.assertEqual(t["incident"]["decision"]["action"], "rollback")
         self.assertEqual(t["incident"]["outcome"], "resolved")
-        self.assertFalse(t["sim"]["injected"])  # 復旧
+        self.assertFalse(t["backend"]["injected"])  # 復旧
 
     def test_dashboard_served(self):
         r = self.c.get("/")

@@ -8,37 +8,42 @@
 :root{--bg:#0e1116;--panel:#161b22;--line:#30363d;--fg:#e6edf3;--muted:#8b949e;--ok:#2ea043;--bad:#f85149;--warn:#d29922;--accent:#58a6ff;}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font-family:"Segoe UI",system-ui,sans-serif;}
-header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 header h1{font-size:18px;margin:0}
 .badge{font-size:12px;padding:2px 8px;border-radius:10px;border:1px solid var(--line);color:var(--muted)}
-main{max-width:980px;margin:0 auto;padding:24px;display:grid;gap:16px}
+.badge.real{border-color:var(--ok);color:var(--ok)} .badge.sim{border-color:var(--accent);color:var(--accent)}
+main{max-width:1000px;margin:0 auto;padding:24px;display:grid;gap:16px}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-@media(max-width:760px){.row{grid-template-columns:1fr}}
+@media(max-width:780px){.row{grid-template-columns:1fr}}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
 .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 12px}
 .big{font-size:44px;font-weight:700;line-height:1.1}
-.ok{color:var(--ok)} .bad{color:var(--bad)}
+.ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
 .kv{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);font-size:14px}
 .kv:last-child{border-bottom:none}
-.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px}
 button{background:#21262d;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 14px;cursor:pointer;font-size:14px}
-button:hover{border-color:var(--accent)}
+button:hover{border-color:var(--accent)} button:disabled{opacity:.5;cursor:wait}
 button.primary{background:var(--bad);border-color:var(--bad);color:#fff;font-weight:600}
-.timeline{max-height:300px;overflow:auto;display:grid;gap:8px}
+button.agent{background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}
+.timeline{max-height:280px;overflow:auto;display:grid;gap:8px}
 .inc{border-left:3px solid var(--line);padding:8px 12px;background:#0d1117;border-radius:0 8px 8px 0}
 .inc.resolved{border-left-color:var(--ok)} .inc.dry_run{border-left-color:var(--accent)}
-.inc.escalated,.inc.loop_guard{border-left-color:var(--warn)}
+.inc.escalated,.inc.loop_guard,.inc.not_resolved{border-left-color:var(--warn)}
 .muted{color:var(--muted);font-size:12px}
+.note{color:var(--muted);font-size:12px;margin-top:10px;line-height:1.6;border-top:1px dashed var(--line);padding-top:8px}
 svg{width:100%;height:80px;margin:10px 0;background:#0d1117;border-radius:6px}
-code{background:#0d1117;padding:1px 5px;border-radius:4px;font-size:12px}
+code{background:#0d1117;padding:1px 5px;border-radius:4px;font-size:12px;word-break:break-all}
 pre{white-space:pre-wrap;font-size:12px;color:var(--muted);margin:0}
+.ctx{background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:8px;margin-top:8px;font-size:12px;color:var(--muted);white-space:pre-wrap}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:8px;border:1px solid var(--line);margin-left:6px}
 </style>
 </head>
 <body>
 <header>
   <h1>🛡️ RunGuard</h1>
   <span class="badge">Cloud Run 当直 SRE エージェント</span>
-  <span class="badge" id="mode">SIM</span>
+  <span class="badge" id="mode">—</span>
   <span class="badge" id="llm">—</span>
 </header>
 <main>
@@ -49,8 +54,14 @@ pre{white-space:pre-wrap;font-size:12px;color:var(--muted);margin:0}
       <div class="muted">5xx エラー率</div>
       <svg id="spark" viewBox="0 0 300 80" preserveAspectRatio="none"></svg>
       <div class="kv"><span>サービス</span><span id="svc">—</span></div>
-      <div class="kv"><span>現リビジョン</span><span id="rev">—</span></div>
+      <div class="kv"><span>いま配信中</span><span id="rev">—</span></div>
       <div class="kv"><span>状態</span><span id="status">—</span></div>
+      <div class="note">
+        <b>正常版(healthy)</b>: <span id="healthyRev">—</span><br>
+        <b>不調版(bad)</b>: <span id="badRev">—</span> <span class="tag">FAULT=http500</span><br>
+        「障害を注入」= トラフィックを<b>不調版へ実際に振替</b>／復旧 = <b>正常版へ戻す</b>（本物の Cloud Run 操作）。
+        不調の中身は <code>sample_service/main.py</code> の <code>FAULT</code> で定義。
+      </div>
     </div>
     <div class="panel">
       <h2>エージェントの判断</h2>
@@ -59,9 +70,11 @@ pre{white-space:pre-wrap;font-size:12px;color:var(--muted);margin:0}
       <div class="controls">
         <button class="primary" id="inject">⚠️ 障害を注入</button>
         <button id="tick">▶ 1サイクル実行</button>
+        <button class="agent" id="agentBtn">🤖 AIに任せる(ADK)</button>
         <button id="reset">↺ リセット</button>
         <label class="muted"><input type="checkbox" id="auto" checked> 自動巡回</label>
       </div>
+      <div id="agentOut" class="ctx" style="display:none"></div>
     </div>
   </div>
   <div class="panel">
@@ -69,7 +82,7 @@ pre{white-space:pre-wrap;font-size:12px;color:var(--muted);margin:0}
     <div class="timeline" id="timeline"><span class="muted">—</span></div>
   </div>
   <div class="panel">
-    <h2>プレイブック（学習）</h2>
+    <h2>プレイブック（学習：障害署名 → 効いた対応）</h2>
     <pre id="playbook">—</pre>
   </div>
 </main>

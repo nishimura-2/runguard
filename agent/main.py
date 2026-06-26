@@ -73,7 +73,7 @@ def app_js():
 @app.get("/api/state")
 def api_state():
     return {
-        "sim": BACKEND.snapshot(),
+        "backend": BACKEND.snapshot(),
         "incidents": [i.model_dump() for i in reversed(STORE.list_incidents(20))],
         "playbook": STORE.playbook_context(),
         "config": {
@@ -101,7 +101,7 @@ def api_tick(x_runguard_token: str = Header(default="")):
     incident = run_cycle(BACKEND.service, _deps())
     return {
         "incident": incident.model_dump() if incident else None,
-        "sim": BACKEND.snapshot(),
+        "backend": BACKEND.snapshot(),
     }
 
 
@@ -111,3 +111,18 @@ def api_reset():
     if hasattr(STORE, "clear"):
         STORE.clear()
     return {"ok": True}
+
+
+@app.post("/api/agent")
+async def api_agent(x_runguard_token: str = Header(default="")):
+    """ADK の LlmAgent を実走させ、LLM 主導で観測→（必要なら）ロールバックを行う。"""
+    _check_token(x_runguard_token)
+    try:
+        from agent.adk_app import run_agent
+        result = await run_agent(
+            RUN_CFG, BACKEND,
+            f"{BACKEND.service} を点検し、悪いデプロイなら正常リビジョンへロールバックして。",
+        )
+        return {"ok": True, **result, "backend": BACKEND.snapshot()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

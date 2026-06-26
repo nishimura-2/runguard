@@ -89,6 +89,7 @@ def run_cycle(service: str, deps: LoopDeps) -> Optional[Incident]:
         diagnosis=diagnosis,
         decision=decision,
         outcome=outcome,
+        context_used=context or "",
     )
     deps.store.save_incident(incident)
     deps.store.update_playbook(diagnosis, decision, outcome)

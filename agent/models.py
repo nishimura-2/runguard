@@ -69,3 +69,4 @@ class Incident(BaseModel):
     decision: Decision
     outcome: Optional[str] = None                 # resolved / not_resolved / escalated / dry_run
     human_override: Optional[str] = None
+    context_used: Optional[str] = None            # この診断が参照した過去の知見（学習→診断の可視化）
