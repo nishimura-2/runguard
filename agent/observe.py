@@ -42,7 +42,34 @@ def _parse_iso(value: str) -> Optional[datetime]:
         return None
 
 
-# ---- 副作用（GCP 読み取り）：ライブ検証は Phase 4 ----
+# ---- 副作用（GCP 読み取り） ----
+
+def fetch_recent_error_logs(cfg: Config, service: str, max_results: int = 8, minutes: int = 10) -> list:
+    """Cloud Logging から直近の ERROR 以上のログ本文を取得（best-effort、失敗時 []）。"""
+    try:
+        from datetime import timedelta
+        import google.cloud.logging
+        from google.cloud.logging import DESCENDING
+        client = google.cloud.logging.Client(project=cfg.project_id)
+        since = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        flt = (
+            'resource.type="cloud_run_revision" '
+            f'AND resource.labels.service_name="{service}" '
+            'AND severity>=ERROR '
+            f'AND timestamp>="{since}"'
+        )
+        out = []
+        for e in client.list_entries(
+            resource_names=[f"projects/{cfg.project_id}"],
+            filter_=flt, order_by=DESCENDING, max_results=max_results,
+        ):
+            p = e.payload
+            msg = p if isinstance(p, str) else (p.get("message") if isinstance(p, dict) else str(p))
+            out.append(str(msg)[:300])
+        return out
+    except Exception:
+        return []
+
 
 def build_observation(
     service: str,

@@ -24,22 +24,33 @@ DASHBOARD_DIR = Path(__file__).resolve().parent.parent / "dashboard"
 app = FastAPI(title="RunGuard")
 
 _service = cfg.target_services[0] if cfg.target_services else "sample-service"
-SIM = SimEnvironment(service=_service)
-STORE = InMemoryStore()
 LLM = select_llm(cfg)
 ELASTIC = make_elastic_store(cfg)        # USE_ELASTIC 時のみ。類似検索＋インシデント蓄積。
-# sim は実 GCP 副作用がないため dry_run を無効化（安全。allowlist/確信度/ループ保護は有効のまま）。
-SIM_CFG = replace(cfg, dry_run=False)
+
+# バックエンド選択: real=本物の Cloud Run 操作 / sim=シミュレーション（既定）
+if cfg.mode == "real":
+    import time as _time
+    from agent.learn import make_store
+    from agent.real_env import RealEnvironment
+    BACKEND = RealEnvironment(cfg)
+    STORE = make_store(cfg)                # Firestore 永続化（project_id があれば）
+    RUN_CFG = cfg                          # 本物のロールバックを行うため DRY_RUN は env 指定（デプロイで 0）
+    SLEEP = _time.sleep                    # verify 前に伝播待ち
+else:
+    BACKEND = SimEnvironment(service=_service)
+    STORE = InMemoryStore()
+    RUN_CFG = replace(cfg, dry_run=False)  # sim は副作用なしなので dry_run 無効でOK
+    SLEEP = lambda s: None
 
 
 def _deps() -> LoopDeps:
     return LoopDeps(
-        observe=SIM.observe,
+        observe=BACKEND.observe,
         llm=LLM,
         store=STORE,
-        cfg=SIM_CFG,
-        executor=lambda d, c, **kw: execute(d, c, rollback_fn=SIM.apply_rollback, **kw),
-        sleep=lambda s: None,
+        cfg=RUN_CFG,
+        executor=lambda d, c, **kw: execute(d, c, rollback_fn=BACKEND.apply_rollback, **kw),
+        sleep=SLEEP,
         elastic=ELASTIC,
     )
 
@@ -62,12 +73,13 @@ def app_js():
 @app.get("/api/state")
 def api_state():
     return {
-        "sim": SIM.snapshot(),
+        "sim": BACKEND.snapshot(),
         "incidents": [i.model_dump() for i in reversed(STORE.list_incidents(20))],
         "playbook": STORE.playbook_context(),
         "config": {
-            "auto_act_threshold": SIM_CFG.auto_act_threshold,
-            "error_rate_threshold": SIM_CFG.error_rate_threshold,
+            "mode": cfg.mode,
+            "auto_act_threshold": RUN_CFG.auto_act_threshold,
+            "error_rate_threshold": RUN_CFG.error_rate_threshold,
             "llm": getattr(LLM, "last_used", None) or type(LLM).__name__,
             "elastic": ELASTIC is not None,
         },
@@ -76,22 +88,26 @@ def api_state():
 
 @app.post("/api/inject")
 def api_inject():
-    SIM.inject_fault()
-    return {"ok": True, "injected": True}
+    try:
+        BACKEND.inject_fault()
+        return {"ok": True, "injected": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.post("/api/tick")
 def api_tick(x_runguard_token: str = Header(default="")):
     _check_token(x_runguard_token)
-    incident = run_cycle(SIM.service, _deps())
+    incident = run_cycle(BACKEND.service, _deps())
     return {
         "incident": incident.model_dump() if incident else None,
-        "sim": SIM.snapshot(),
+        "sim": BACKEND.snapshot(),
     }
 
 
 @app.post("/api/reset")
 def api_reset():
-    SIM.reset()
-    STORE.clear()
+    BACKEND.reset()
+    if hasattr(STORE, "clear"):
+        STORE.clear()
     return {"ok": True}

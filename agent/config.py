@@ -60,6 +60,10 @@ class Config:
         default_factory=lambda: _get_list("TARGET_SERVICES", ("sample-service",))
     )
 
+    # --- バックエンド種別（sim=シミュレーション / real=本物の Cloud Run 操作） ---
+    mode: str = field(default_factory=lambda: _get("RUNGUARD_MODE", "sim"))
+    probe_count: int = field(default_factory=lambda: _get_int("PROBE_COUNT", 8))
+
     # --- Gemini ---
     use_vertexai: bool = field(default_factory=lambda: _get_bool("GOOGLE_GENAI_USE_VERTEXAI", True))
     gemini_model: str = field(default_factory=lambda: _get("GEMINI_MODEL", "gemini-3.5-flash"))
