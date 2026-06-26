@@ -4,6 +4,14 @@ async function api(path, method = "GET") {
   return r.json();
 }
 const fmtPct = (x) => (x * 100).toFixed(0) + "%";
+const fmtTime = (iso) => {
+  try {
+    return new Date(iso).toLocaleString("ja-JP", {
+      timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }) + " JST";
+  } catch (e) { return iso; }
+};
 
 // --- 日本語ラベル ---
 const CAT_JA = {
@@ -76,7 +84,7 @@ function render(s) {
     ? s.incidents.map((i) => `<div class="inc ${i.outcome || ""}">
         <div><b>${ja(CAT_JA, i.diagnosis.category)}</b> → ${ja(ACT_JA, i.decision.action)}
         <span class="muted">（${ja(OUT_JA, i.outcome)}）</span></div>
-        <div class="muted">${i.timestamp}</div></div>`).join("")
+        <div class="muted">${fmtTime(i.timestamp)}</div></div>`).join("")
     : '<span class="muted">まだインシデントはありません。</span>';
 
   $("playbook").textContent = s.playbook || "（まだ学習データなし。インシデントを重ねると「この障害署名にはこの対応が効いた」が貯まり、次の診断に渡されます）";
