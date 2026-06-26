@@ -54,26 +54,39 @@ def build_agent(cfg: Config, backend):
     )
 
 
-async def run_agent(cfg: Config, backend, message: str) -> dict:
-    """ADK の Runner で LlmAgent を1回実行し、最終応答とツール呼び出し履歴を返す。"""
+async def run_agent(cfg: Config, backend, message: str, attempts: int = 2) -> dict:
+    """ADK の Runner で LlmAgent を1回実行し、最終応答とツール呼び出し履歴を返す。
+
+    Vertex の一時的な 429（レート上限）には短いバックオフで1回リトライする。
+    """
+    import asyncio
     import uuid
 
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
     from google.genai import types
 
-    agent_obj = build_agent(cfg, backend)
-    session_service = InMemorySessionService()
-    runner = Runner(agent=agent_obj, app_name="runguard", session_service=session_service)
-    sid = uuid.uuid4().hex
-    await session_service.create_session(app_name="runguard", user_id="dashboard", session_id=sid)
-    new_message = types.Content(role="user", parts=[types.Part(text=message)])
+    last_err = None
+    for attempt in range(max(1, attempts)):
+        try:
+            agent_obj = build_agent(cfg, backend)
+            session_service = InMemorySessionService()
+            runner = Runner(agent=agent_obj, app_name="runguard", session_service=session_service)
+            sid = uuid.uuid4().hex
+            await session_service.create_session(app_name="runguard", user_id="dashboard", session_id=sid)
+            new_message = types.Content(role="user", parts=[types.Part(text=message)])
 
-    steps = []
-    final = None
-    async for event in runner.run_async(user_id="dashboard", session_id=sid, new_message=new_message):
-        for fc in (event.get_function_calls() or []):
-            steps.append({"tool": fc.name, "args": {k: str(v) for k, v in dict(fc.args).items()}})
-        if event.is_final_response() and event.content and event.content.parts:
-            final = event.content.parts[0].text
-    return {"final": final, "steps": steps}
+            steps, final = [], None
+            async for event in runner.run_async(user_id="dashboard", session_id=sid, new_message=new_message):
+                for fc in (event.get_function_calls() or []):
+                    steps.append({"tool": fc.name, "args": {k: str(v) for k, v in dict(fc.args).items()}})
+                if event.is_final_response() and event.content and event.content.parts:
+                    final = event.content.parts[0].text
+            return {"final": final, "steps": steps}
+        except Exception as e:
+            last_err = e
+            transient = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
+            if attempt + 1 < attempts and transient:
+                await asyncio.sleep(20)
+                continue
+            raise last_err
