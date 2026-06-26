@@ -86,9 +86,23 @@ class RealEnvironment:
         from google.cloud import run_v2
         client = self._client()
         service = client.get_service(name=self._svc_name())
-        service.traffic = [run_v2.TrafficTarget(
-            type_=run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION,
-            revision=revision_name, percent=100)]
+        # 既存のタグ（healthy/bad 等）を保持したまま percent だけ付け替える
+        # （単一エントリで上書きするとタグが消え、次回の tag→revision 解決が壊れるため）
+        tagged = {}
+        for t in list(service.traffic) + list(getattr(service, "traffic_statuses", [])):
+            tag, rev = getattr(t, "tag", ""), getattr(t, "revision", "")
+            if tag and rev and tag not in tagged:
+                tagged[tag] = rev
+        at = run_v2.TrafficTargetAllocationType.TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION
+        new_traffic, target_tagged = [], False
+        for tag, rev in tagged.items():
+            if rev == revision_name:
+                target_tagged = True
+            new_traffic.append(run_v2.TrafficTarget(
+                type_=at, revision=rev, percent=(100 if rev == revision_name else 0), tag=tag))
+        if not target_tagged:
+            new_traffic.append(run_v2.TrafficTarget(type_=at, revision=revision_name, percent=100))
+        service.traffic = new_traffic
         client.update_service(service=service).result()
 
     def _probe(self, url: str) -> List[int]:
