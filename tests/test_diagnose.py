@@ -110,6 +110,20 @@ class TestModels(unittest.TestCase):
         self.assertEqual(d.recommended_action, ActionType.rollback)
 
 
+class TestFallbackLLM(unittest.TestCase):
+    def test_falls_back_on_primary_error(self):
+        from agent.gemini_client import FallbackLLM, RuleBasedLLM
+
+        class Boom:
+            def generate_structured(self, **kw):
+                raise RuntimeError("gemini down")
+
+        fb = FallbackLLM(Boom(), RuleBasedLLM())
+        d = fb.generate_structured(prompt=build_prompt(make_bad_deploy_observation()), schema=Diagnosis)
+        self.assertEqual(d.category, Category.bad_deploy)   # RuleBased が拾う
+        self.assertIn("fallback", fb.last_used)
+
+
 class TestObserveHelpers(unittest.TestCase):
     def test_error_rate(self):
         self.assertEqual(error_rate(0, 0), 0.0)

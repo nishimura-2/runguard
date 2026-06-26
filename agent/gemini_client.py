@@ -110,11 +110,31 @@ class RuleBasedLLM:
                       recommended_action="escalate")
 
 
+class FallbackLLM:
+    """primary を試し、失敗したら fallback に切替（実 Gemini 障害でもデモ/ループを止めない）。"""
+
+    def __init__(self, primary, fallback):
+        self._primary = primary
+        self._fallback = fallback
+        self.last_used = type(primary).__name__
+
+    def generate_structured(self, *, prompt, schema, system_instruction=None):
+        try:
+            out = self._primary.generate_structured(
+                prompt=prompt, schema=schema, system_instruction=system_instruction)
+            self.last_used = type(self._primary).__name__
+            return out
+        except Exception:
+            self.last_used = type(self._fallback).__name__ + "(fallback)"
+            return self._fallback.generate_structured(
+                prompt=prompt, schema=schema, system_instruction=system_instruction)
+
+
 def select_llm(cfg: Config = default_config) -> LLMClient:
-    """Gemini が使える設定なら GeminiClient、さもなくば RuleBasedLLM（オフライン）。"""
+    """Vertex/開発API が使える設定なら Gemini（失敗時 RuleBased に退避）、無ければ RuleBased。"""
     import os
     configured = (
         (cfg.use_vertexai and bool(cfg.google_cloud_project))
         or (not cfg.use_vertexai and bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")))
     )
-    return GeminiClient(cfg) if configured else RuleBasedLLM()
+    return FallbackLLM(GeminiClient(cfg), RuleBasedLLM()) if configured else RuleBasedLLM()

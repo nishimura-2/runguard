@@ -68,7 +68,7 @@ def api_state():
         "config": {
             "auto_act_threshold": SIM_CFG.auto_act_threshold,
             "error_rate_threshold": SIM_CFG.error_rate_threshold,
-            "llm": type(LLM).__name__,
+            "llm": getattr(LLM, "last_used", None) or type(LLM).__name__,
             "elastic": ELASTIC is not None,
         },
     }
