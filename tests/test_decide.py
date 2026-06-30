@@ -41,6 +41,25 @@ def diag(category=Category.bad_deploy, confidence=0.9):
                      recommended_action=ActionType.rollback)
 
 
+class FakeBackend:
+    """execute の live ディスパッチ確認用。呼ばれたメソッドを記録する。"""
+
+    def __init__(self):
+        self.calls = []
+
+    def apply_rollback(self, cfg, service, revision):
+        self.calls.append(("rollback", service, revision))
+
+    def scale_memory(self, cfg, service):
+        self.calls.append(("scale_memory", service))
+
+    def scale_instances(self, cfg, service):
+        self.calls.append(("scale_instances", service))
+
+    def restart(self, cfg, service):
+        self.calls.append(("restart", service))
+
+
 class TestDecide(unittest.TestCase):
     def test_bad_deploy_high_confidence_auto_rollback(self):
         d = decide(diag(Category.bad_deploy, 0.9), obs(), CFG)
@@ -59,9 +78,29 @@ class TestDecide(unittest.TestCase):
         self.assertEqual(d.action, ActionType.escalate)
         self.assertIn("allowlist", d.reason)
 
-    def test_out_of_memory_escalates(self):
+    def test_out_of_memory_scales_memory(self):
         d = decide(diag(Category.out_of_memory, 0.95), obs(), CFG)
+        self.assertEqual(d.action, ActionType.scale_memory)
+        self.assertFalse(d.requires_human)          # 取り消し可能 → 自律実行
+
+    def test_out_of_memory_low_confidence_escalates(self):
+        d = decide(diag(Category.out_of_memory, 0.5), obs(), CFG)
         self.assertEqual(d.action, ActionType.escalate)
+        self.assertIn("確信度", d.reason)
+
+    def test_traffic_spike_scales_instances(self):
+        d = decide(diag(Category.traffic_spike, 0.9), obs(), CFG)
+        self.assertEqual(d.action, ActionType.scale_instances)
+        self.assertFalse(d.requires_human)
+
+    def test_dependency_5xx_escalates(self):
+        d = decide(diag(Category.dependency_5xx, 0.9), obs(), CFG)
+        self.assertEqual(d.action, ActionType.escalate)   # 自動対応の手段なし → 人へ
+
+    def test_scale_not_in_allowlist_escalates(self):
+        d = decide(diag(Category.out_of_memory, 0.95), obs(service="runguard-agent"), CFG)
+        self.assertEqual(d.action, ActionType.escalate)
+        self.assertIn("allowlist", d.reason)
 
     def test_feature_bug_with_source_self_heals(self):
         o = obs()
@@ -87,9 +126,10 @@ class TestDecide(unittest.TestCase):
         d = decide(diag(Category.crash_loop, 0.9), obs(seconds_since_deploy=120), CFG)
         self.assertEqual(d.action, ActionType.rollback)
 
-    def test_crash_loop_old_deploy_escalates(self):
+    def test_crash_loop_old_deploy_restarts(self):
         d = decide(diag(Category.crash_loop, 0.9), obs(seconds_since_deploy=99999), CFG)
-        self.assertEqual(d.action, ActionType.escalate)
+        self.assertEqual(d.action, ActionType.restart)
+        self.assertFalse(d.requires_human)          # 取り消し可能 → 自律実行
 
     def test_missing_healthy_revision_escalates(self):
         d = decide(diag(Category.bad_deploy, 0.95), obs(healthy=None), CFG)
@@ -154,6 +194,48 @@ class TestExecute(unittest.TestCase):
         res = execute(dec, CFG)
         self.assertTrue(res.executed)
         self.assertEqual(res.action, ActionType.escalate)
+
+    def test_scale_memory_executes_live(self):
+        be = FakeBackend()
+        dec = Decision(action=ActionType.scale_memory, target_service="sample-service",
+                       requires_human=False, dry_run=False)
+        res = execute(dec, replace(CFG, dry_run=False), backend=be)
+        self.assertTrue(res.executed)
+        self.assertEqual(res.action, ActionType.scale_memory)
+        self.assertIn(("scale_memory", "sample-service"), be.calls)
+
+    def test_scale_instances_executes_live(self):
+        be = FakeBackend()
+        dec = Decision(action=ActionType.scale_instances, target_service="sample-service",
+                       requires_human=False, dry_run=False)
+        res = execute(dec, replace(CFG, dry_run=False), backend=be)
+        self.assertTrue(res.executed)
+        self.assertIn(("scale_instances", "sample-service"), be.calls)
+
+    def test_restart_executes_live(self):
+        be = FakeBackend()
+        dec = Decision(action=ActionType.restart, target_service="sample-service",
+                       requires_human=False, dry_run=False)
+        res = execute(dec, replace(CFG, dry_run=False), backend=be)
+        self.assertTrue(res.executed)
+        self.assertIn(("restart", "sample-service"), be.calls)
+
+    def test_scale_dry_run_does_not_call_backend(self):
+        be = FakeBackend()
+        dec = Decision(action=ActionType.scale_memory, target_service="sample-service",
+                       requires_human=False, dry_run=True)
+        res = execute(dec, CFG, backend=be)         # CFG は dry_run=True
+        self.assertFalse(res.executed)
+        self.assertIn("DRY_RUN", res.message)
+        self.assertEqual(be.calls, [])
+
+    def test_scale_not_allowed_skips(self):
+        be = FakeBackend()
+        dec = Decision(action=ActionType.scale_memory, target_service="runguard-agent",
+                       requires_human=False, dry_run=False)
+        res = execute(dec, replace(CFG, dry_run=False), backend=be)
+        self.assertEqual(res.skipped_reason, "not_allowed")
+        self.assertEqual(be.calls, [])
 
 
 class TestVerify(unittest.TestCase):

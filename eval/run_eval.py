@@ -34,6 +34,9 @@ from mocks import ScriptedLLM, build_observation  # noqa: E402
 AUTO_MTTR_MIN = 1.5
 MANUAL_MTTR_MIN = 30.0
 
+# 取り消し可能＝自律実行してよいアクション（rollback だけでない＝復旧手段の幅）。
+AUTONOMOUS_ACTIONS = {"rollback", "scale_memory", "scale_instances", "restart"}
+
 # CI 合格ライン
 MIN_DIAG_ACC = 0.70
 MIN_ACTION_ACC = 0.95
@@ -66,13 +69,14 @@ def run() -> int:
         )
         dec = decide(diagnose(obs, scripted), obs, cfg)
         act_ok = dec.action.value == c["expected_action"]
-        is_auto_rollback = dec.action.value == "rollback" and not dec.requires_human
-        false_action = is_auto_rollback and c["expected_action"] != "rollback"
+        is_auto = dec.action.value in AUTONOMOUS_ACTIONS and not dec.requires_human
+        # 誤動作: 人に委ねるべき(=自律対象外)なのに自律実行してしまった
+        false_action = is_auto and c["expected_action"] not in AUTONOMOUS_ACTIONS
 
         diag_hits += int(diag_ok)
         act_hits += int(act_ok)
         false_actions += int(false_action)
-        mttr_total += AUTO_MTTR_MIN if (is_auto_rollback and act_ok) else MANUAL_MTTR_MIN
+        mttr_total += AUTO_MTTR_MIN if (is_auto and act_ok) else MANUAL_MTTR_MIN
 
         rows.append((c["name"], diag_pred.category.value, c["expected_category"], diag_ok,
                      dec.action.value, c["expected_action"], act_ok, false_action))

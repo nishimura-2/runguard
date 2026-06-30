@@ -25,6 +25,9 @@ class Category(str, Enum):
 class ActionType(str, Enum):
     rollback = "rollback"
     self_heal = "self_heal"              # AI がソースのバグだけ修正して新リビジョンをデプロイ（新機能は維持）
+    scale_memory = "scale_memory"        # メモリ上限を引き上げ（out_of_memory／取り消し可能）
+    scale_instances = "scale_instances"  # max-instances を増やす（traffic_spike／取り消し可能）
+    restart = "restart"                  # 同一イメージで再起動＝新リビジョン（crash_loop／取り消し可能）
     escalate = "escalate"
     none = "none"
 

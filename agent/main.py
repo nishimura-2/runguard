@@ -49,7 +49,7 @@ def _deps() -> LoopDeps:
         llm=LLM,
         store=STORE,
         cfg=RUN_CFG,
-        executor=lambda d, c, **kw: execute(d, c, rollback_fn=BACKEND.apply_rollback, **kw),
+        executor=lambda d, c, **kw: execute(d, c, backend=BACKEND, **kw),
         sleep=SLEEP,
         elastic=ELASTIC,
     )
@@ -101,6 +101,26 @@ def api_inject_feature():
     try:
         BACKEND.inject_feature_bug()
         return {"ok": True, "injected": True, "scenario": "feature_bug"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/inject_oom")
+def api_inject_oom():
+    """メモリ逼迫（OOM）を注入 → エージェントはメモリ上限を引き上げて復旧。"""
+    try:
+        BACKEND.inject_oom()
+        return {"ok": True, "injected": True, "scenario": "oom"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/inject_traffic")
+def api_inject_traffic():
+    """アクセス急増を注入 → エージェントは max-instances を増やして復旧。"""
+    try:
+        BACKEND.inject_traffic_spike()
+        return {"ok": True, "injected": True, "scenario": "traffic_spike"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

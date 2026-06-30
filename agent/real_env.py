@@ -55,7 +55,7 @@ def serving_revision(service) -> str:
 
 class RealEnvironment:
     def __init__(self, cfg: Config = default_config, services_client=None, prober=None,
-                 log_fetcher=None, route_fn=None, deploy_fn=None):
+                 log_fetcher=None, route_fn=None, deploy_fn=None, update_fn=None):
         self.cfg = cfg
         self.service = cfg.target_services[0] if cfg.target_services else "sample-service"
         self._services = services_client
@@ -63,6 +63,7 @@ class RealEnvironment:
         self._log_fetcher = log_fetcher  # callable() -> List[str]
         self._route_fn = route_fn        # callable(revision_name) -> None（テスト注入用）
         self._deploy_fn = deploy_fn      # callable(CodeFix) -> revision_name（ライブビルド注入用・任意）
+        self._update_fn = update_fn      # callable(kind, value) -> None（scale/restart のテスト注入用）
         self._incident_started_at: Optional[str] = None
         # snapshot 用キャッシュ（毎ポーリングで API を叩かない）
         self._cur_rev = ""
@@ -71,6 +72,8 @@ class RealEnvironment:
         self._feature_bug_rev = ""
         self._fixed_rev = ""
         self._scenario = "healthy"
+        self._memory_mib: Optional[int] = None
+        self._max_instances: Optional[int] = None
         self._last_error_rate = 0.0
         self.history: list = []
 
@@ -225,6 +228,47 @@ class RealEnvironment:
         self._cur_rev = revision
         self._scenario = "healthy"
 
+    # --- ① 取り消し可能な実操作（既存 run.admin 権限内・ソース再ビルド不要） ---
+    def scale_memory(self, cfg, service) -> None:
+        """メモリ上限を引き上げる（新リビジョンが作られる）。out_of_memory の対応。"""
+        new_mib = (self._memory_mib or 256) * 2
+        self._apply_update("memory", new_mib)
+        self._memory_mib = new_mib
+        self._recover()
+
+    def scale_instances(self, cfg, service) -> None:
+        """max-instances を増やす。traffic_spike の対応。"""
+        new_max = (self._max_instances or 1) + 4
+        self._apply_update("max_instances", new_max)
+        self._max_instances = new_max
+        self._recover()
+
+    def restart(self, cfg, service) -> None:
+        """同一イメージで新リビジョンを強制（再起動）。crash_loop（非デプロイ起因）の対応。"""
+        self._apply_update("restart", _now_iso())
+        self._recover()
+
+    def _recover(self) -> None:
+        self._incident_started_at = None
+        self._scenario = "healthy"
+
+    def _apply_update(self, kind: str, value) -> None:
+        """Cloud Run Admin で template を更新（=新リビジョン）。テストでは update_fn を注入。"""
+        if self._update_fn is not None:
+            self._update_fn(kind, value)
+            return
+        from google.cloud import run_v2  # 遅延 import
+        client = self._client()
+        svc = client.get_service(name=self._svc_name())
+        if kind == "memory":
+            svc.template.containers[0].resources.limits["memory"] = f"{value}Mi"
+        elif kind == "max_instances":
+            svc.template.scaling.max_instance_count = int(value)
+        elif kind == "restart":
+            svc.template.annotations["runguard.dev/restart"] = str(value)
+        svc.template.revision = ""  # リビジョン名は自動採番
+        client.update_service(service=svc).result()
+
     def reset(self) -> None:
         try:
             svc = self._get_service()
@@ -245,6 +289,7 @@ class RealEnvironment:
             "feature_bug_revision": self._feature_bug_rev, "fixed_revision": self._fixed_rev,
             "scenario": self._scenario,
             "injected": bool(self._incident_started_at), "error_rate": self._last_error_rate,
+            "memory_mib": self._memory_mib, "max_instances": self._max_instances,
             "faulty_source": BUGGY_FEATURE_SOURCE if self._scenario == "feature_bug" else None,
             "applied_source": None,
             "history": [{"t": t, "error_rate": e} for t, e in self.history],

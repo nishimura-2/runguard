@@ -22,6 +22,9 @@ const CAT_JA = {
 const ACT_JA = {
   rollback: "ロールバック（前リビジョンへ復帰）",
   self_heal: "🔧 AIコード修正（新機能は維持）",
+  scale_memory: "🧠 メモリ上限を引き上げ",
+  scale_instances: "📈 max-instances を増やす",
+  restart: "🔄 再起動（新リビジョン）",
   escalate: "人へエスカレーション", none: "対応なし",
 };
 const OUT_JA = {
@@ -95,6 +98,9 @@ function render(s) {
   $("svc").textContent = b.service;
   $("rev").innerHTML = `<code>${b.current_revision || "—"}</code> ${revRole(b)}`;
   $("status").innerHTML = b.injected ? '<span class="bad">不調（障害注入中）</span>' : '<span class="ok">正常</span>';
+  const mem = b.memory_mib ? `${b.memory_mib}MiB` : "—";
+  const inst = (b.max_instances != null) ? `${b.max_instances}` : "—";
+  $("capacity").innerHTML = `<code>${mem}</code> / 最大 <code>${inst}</code>`;
   $("healthyRev").textContent = b.healthy_revision || "—";
   $("badRev").textContent = b.bad_revision || "—";
   spark(b.history);
@@ -130,6 +136,8 @@ async function refresh() { try { render(await api("/api/state")); } catch (e) { 
 
 $("inject").onclick = async () => { await api("/api/inject", "POST"); refresh(); };
 $("injectFeature").onclick = async () => { await api("/api/inject_feature", "POST"); refresh(); };
+$("injectOom").onclick = async () => { await api("/api/inject_oom", "POST"); refresh(); };
+$("injectTraffic").onclick = async () => { await api("/api/inject_traffic", "POST"); refresh(); };
 $("tick").onclick = async () => { await api("/api/tick", "POST"); refresh(); };
 $("reset").onclick = async () => { await api("/api/reset", "POST"); refresh(); };
 $("approveFix").onclick = async () => {

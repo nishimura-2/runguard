@@ -127,5 +127,34 @@ class TestFeatureBugSelfHeal(unittest.TestCase):
         self.assertFalse(env.snapshot()["injected"])
 
 
+class TestScaleActions(unittest.TestCase):
+    def _env(self, updates):
+        return RealEnvironment(
+            CFG, services_client=FakeClient(fake_service(serving="svc-healthy-1", tags=FULL_TAGS)),
+            prober=lambda u, n: [200] * 4, route_fn=lambda r: None,
+            update_fn=lambda kind, val: updates.append((kind, val)),
+        )
+
+    def test_scale_memory_doubles_and_updates(self):
+        ups = []
+        env = self._env(ups)
+        env.scale_memory(CFG, "sample-service")
+        self.assertEqual(ups[-1][0], "memory")
+        self.assertEqual(env.snapshot()["memory_mib"], 512)   # 256 -> 512
+
+    def test_scale_instances_increases_and_updates(self):
+        ups = []
+        env = self._env(ups)
+        env.scale_instances(CFG, "sample-service")
+        self.assertEqual(ups[-1][0], "max_instances")
+        self.assertEqual(env.snapshot()["max_instances"], 5)  # 1 -> 5
+
+    def test_restart_forces_new_revision(self):
+        ups = []
+        env = self._env(ups)
+        env.restart(CFG, "sample-service")
+        self.assertEqual(ups[-1][0], "restart")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -106,9 +106,14 @@ class RuleBasedLLM:
                           reasoning="エラー急増がデプロイ直後（規則ベース）。",
                           recommended_action="rollback", evidence_log_lines=[])
         if mem >= 0.85:
-            return schema(category="out_of_memory", confidence=0.7,
-                          reasoning="メモリ使用率が高い（規則ベース）。",
-                          recommended_action="escalate")
+            return schema(category="out_of_memory", confidence=0.8,
+                          reasoning="メモリ使用率が高い（規則ベース）。メモリ上限引上げで復旧可能。",
+                          recommended_action="scale_memory")
+        req = _extract_int(prompt, r"request_count:\s*(\d+)") or 0
+        if er >= 0.3 and req >= 2000 and not recent_deploy:
+            return schema(category="traffic_spike", confidence=0.8,
+                          reasoning="デプロイ無し＋リクエスト急増（規則ベース）。インスタンス増で復旧可能。",
+                          recommended_action="scale_instances")
         if er >= 0.3:
             return schema(category="dependency_5xx", confidence=0.6,
                           reasoning="デプロイ相関のない 5xx（規則ベース）。",

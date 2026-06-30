@@ -54,9 +54,23 @@ incidents:
       last_healthy_revision: sample-service-00001-healthy
       current_revision: sample-service-00001-healthy
       recent_error_logs: ["Memory limit exceeded"]
-    diagnosis_confidence: 0.70
+    diagnosis_confidence: 0.85
     expected_category: out_of_memory
-    expected_action: escalate           # 設定変更=人の確認推奨
+    expected_action: scale_memory       # 取り消し可能 → メモリ上限引上げで自動復旧
+
+  - name: traffic_spike_no_deploy
+    observation:
+      service: sample-service
+      error_rate: 0.50
+      request_count: 5000
+      memory_ratio: 0.40
+      seconds_since_last_deploy: null   # デプロイ無し＋アクセス急増
+      last_healthy_revision: sample-service-00001-healthy
+      current_revision: sample-service-00001-healthy
+      recent_error_logs: ["instances saturated; 429 Too Many Requests"]
+    diagnosis_confidence: 0.85
+    expected_category: traffic_spike
+    expected_action: scale_instances    # 取り消し可能 → max-instances 増で自動復旧
 
   - name: healthy_low_signal
     observation:

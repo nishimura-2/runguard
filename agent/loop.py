@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from agent.actions import LIVE_ACTIONS
 from agent.actions import execute as default_execute
 from agent.config import Config
 from agent.config import config as default_config
@@ -76,8 +77,10 @@ def run_cycle(service: str, deps: LoopDeps) -> Optional[Incident]:
         seconds_since_last_action=secs_since,
     )
 
-    rolled_back = result.action == ActionType.rollback and result.skipped_reason is None
-    if rolled_back:
+    # 取り消し可能アクション（rollback / scale_memory / scale_instances / restart）が
+    # 抑止されず実行された → 記録し、ライブなら再観測で復旧を検証。
+    acted = result.action in LIVE_ACTIONS and result.skipped_reason is None
+    if acted:
         deps.store.record_action(service, now)
         if result.executed and not result.dry_run:
             deps.sleep(cfg.verify_wait_seconds)

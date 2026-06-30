@@ -46,12 +46,28 @@ def guard_allows_action(
 
 # ---- 実行 ----
 
+# 取り消し可能（自律実行可）なアクション。escalate/self_heal は execute では扱わない。
+LIVE_ACTIONS = {
+    ActionType.rollback, ActionType.scale_memory,
+    ActionType.scale_instances, ActionType.restart,
+}
+
+# dry-run 表示・実行後メッセージ用の語句。
+_PHRASE = {
+    ActionType.rollback: "正常リビジョンへロールバック",
+    ActionType.scale_memory: "メモリ上限を引き上げ",
+    ActionType.scale_instances: "max-instances を増やす",
+    ActionType.restart: "再起動（新リビジョン）",
+}
+
+
 def execute(
     decision: Decision,
     cfg: Config = default_config,
     *,
     actions_taken_this_incident: int = 0,
     seconds_since_last_action: Optional[int] = None,
+    backend=None,
     rollback_fn=None,
 ) -> ActionResult:
     if decision.action == ActionType.escalate:
@@ -63,18 +79,20 @@ def execute(
             message=f"escalate: {decision.reason}",
         )
 
-    if decision.action != ActionType.rollback:
+    if decision.action not in LIVE_ACTIONS:
         return ActionResult(
             action=decision.action, executed=False, dry_run=cfg.dry_run,
             target_service=decision.target_service, message="no-op",
         )
 
-    # --- rollback の各ガード ---
+    phrase = _PHRASE[decision.action]
+
+    # --- 取り消し可能アクション共通のガード ---
     if not cfg.is_target_allowed(decision.target_service or ""):
         return ActionResult(
             action=ActionType.escalate, executed=False, dry_run=cfg.dry_run,
             target_service=decision.target_service,
-            message="allowlist 外のためロールバック中止（自己操作防止の二重ガード）。",
+            message=f"allowlist 外のため{phrase}を中止（自己操作防止の二重ガード）。",
             skipped_reason="not_allowed",
         )
     if decision.requires_human:
@@ -84,7 +102,7 @@ def execute(
             message="requires_human=True のため自動実行しない（人の承認待ち）。",
             skipped_reason="requires_human",
         )
-    if not decision.target_revision:
+    if decision.action == ActionType.rollback and not decision.target_revision:
         return ActionResult(
             action=ActionType.escalate, executed=False, dry_run=cfg.dry_run,
             target_service=decision.target_service,
@@ -98,30 +116,49 @@ def execute(
     )
     if not ok:
         return ActionResult(
-            action=ActionType.rollback, executed=False, dry_run=cfg.dry_run,
+            action=decision.action, executed=False, dry_run=cfg.dry_run,
             target_service=decision.target_service,
             target_revision=decision.target_revision,
-            message=f"ループ保護によりロールバック抑止: {why}",
+            message=f"ループ保護により{phrase}を抑止: {why}",
             skipped_reason="loop_guard",
         )
 
-    return _rollback(decision, cfg, rollback_fn)
+    return _run_live(decision, cfg, backend, rollback_fn)
 
 
-def _rollback(decision: Decision, cfg: Config, rollback_fn=None) -> ActionResult:
+def _run_live(decision: Decision, cfg: Config, backend, rollback_fn=None) -> ActionResult:
+    action = decision.action
     service = decision.target_service
     revision = decision.target_revision
+    phrase = _PHRASE[action]
+
     if cfg.dry_run:
         return ActionResult(
-            action=ActionType.rollback, executed=False, dry_run=True,
+            action=action, executed=False, dry_run=True,
             target_service=service, target_revision=revision,
-            message=f"DRY_RUN: {service} のトラフィックを {revision} へ 100% 戻す（意図のみ）。",
+            message=f"DRY_RUN: {service} に対し {phrase}（意図のみ）。",
         )
-    (rollback_fn or _apply_rollback_live)(cfg, service, revision)
+
+    if action == ActionType.rollback:
+        fn = rollback_fn or (backend.apply_rollback if backend is not None else _apply_rollback_live)
+        fn(cfg, service, revision)
+        msg = f"{service} のトラフィックを {revision} へ 100% 戻した。"
+    elif action == ActionType.scale_memory:
+        backend.scale_memory(cfg, service)
+        msg = f"{service} のメモリ上限を引き上げた。"
+    elif action == ActionType.scale_instances:
+        backend.scale_instances(cfg, service)
+        msg = f"{service} の max-instances を増やした。"
+    elif action == ActionType.restart:
+        backend.restart(cfg, service)
+        msg = f"{service} を再起動（新リビジョン）した。"
+    else:  # 到達しない（LIVE_ACTIONS でガード済み）
+        return ActionResult(action=action, executed=False, dry_run=False,
+                            target_service=service, message="no-op")
+
     return ActionResult(
-        action=ActionType.rollback, executed=True, dry_run=False,
-        target_service=service, target_revision=revision,
-        message=f"{service} のトラフィックを {revision} へ 100% 戻した。",
+        action=action, executed=True, dry_run=False,
+        target_service=service, target_revision=revision, message=msg,
     )
 
 

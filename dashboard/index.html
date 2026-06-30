@@ -66,6 +66,7 @@ button.feature{background:#bb8009;border-color:#bb8009;color:#fff;font-weight:60
       <div class="kv"><span>サービス</span><span id="svc">—</span></div>
       <div class="kv"><span>いま配信中</span><span id="rev">—</span></div>
       <div class="kv"><span>状態</span><span id="status">—</span></div>
+      <div class="kv"><span>メモリ上限 / 最大インスタンス</span><span id="capacity">—</span></div>
       <div class="note">
         <b>正常版(healthy)</b>: <span id="healthyRev">—</span><br>
         <b>不調版(bad)</b>: <span id="badRev">—</span> <span class="tag">FAULT=http500</span><br>
@@ -79,8 +80,13 @@ button.feature{background:#bb8009;border-color:#bb8009;color:#fff;font-weight:60
       <div id="agent"><span class="muted">まだインシデントはありません。</span></div>
       <h2 style="margin-top:16px">操作</h2>
       <div class="controls">
-        <button class="primary" id="inject">⚠️ 障害を注入(http500)</button>
-        <button class="feature" id="injectFeature">🆕 新機能＋バグ投入</button>
+        <span class="muted">障害を注入:</span>
+        <button class="primary" id="inject">⚠️ 悪いデプロイ(http500)</button>
+        <button class="feature" id="injectFeature">🆕 新機能＋バグ</button>
+        <button class="feature" id="injectOom">🧠 メモリ不足(OOM)</button>
+        <button class="feature" id="injectTraffic">📈 アクセス急増</button>
+      </div>
+      <div class="controls" style="margin-top:8px">
         <button id="tick">▶ 1サイクル実行</button>
         <button class="agent" id="agentBtn">🤖 AIに任せる(ADK)</button>
         <button id="reset">↺ リセット</button>
