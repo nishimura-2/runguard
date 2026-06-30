@@ -93,6 +93,14 @@ class RuleBasedLLM:
         mem = _extract_float(prompt, r"memory_ratio:\s*([0-9.]+)") or 0.0
         secs = _extract_int(prompt, r"\((\d+) 秒前")
         recent_deploy = secs is not None and secs <= 600
+        exception_in_logs = any(
+            kw in prompt for kw in ("Traceback", "ZeroDivisionError", "Exception", "Error:")
+        )
+        # アプリのコード例外(traceback)で 5xx → 新機能のバグ。ロールバックより self_heal。
+        if er >= 0.3 and exception_in_logs:
+            return schema(category="feature_bug", confidence=0.9,
+                          reasoning="アプリのコード例外(traceback)で 5xx。新機能のバグと判断（規則ベース）。",
+                          recommended_action="self_heal", evidence_log_lines=[])
         if er >= 0.3 and recent_deploy:
             return schema(category="bad_deploy", confidence=0.9,
                           reasoning="エラー急増がデプロイ直後（規則ベース）。",

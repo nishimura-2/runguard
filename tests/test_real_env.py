@@ -3,6 +3,7 @@ import unittest
 from dataclasses import replace
 
 from agent.config import Config
+from agent.models import CodeFix
 from agent.real_env import (
     RealEnvironment,
     error_rate_from_statuses,
@@ -16,12 +17,16 @@ class Obj:
         self.__dict__.update(kw)
 
 
-def fake_service(serving="svc-healthy-1"):
-    tags = {"healthy": "svc-healthy-1", "bad": "svc-bad-2"}
+def fake_service(serving="svc-healthy-1", tags=None):
+    tags = tags or {"healthy": "svc-healthy-1", "bad": "svc-bad-2"}
     traffic = [Obj(tag=t, revision=r, percent=(100 if r == serving else 0)) for t, r in tags.items()]
     statuses = [Obj(tag=t, revision=r, percent=(100 if r == serving else 0)) for t, r in tags.items()]
     return Obj(traffic=traffic, traffic_statuses=statuses,
                latest_ready_revision=serving, uri="https://svc.example")
+
+
+FULL_TAGS = {"healthy": "svc-healthy-1", "bad": "svc-bad-2",
+             "feature-bug": "svc-fb-3", "fixed": "svc-fixed-4"}
 
 
 class FakeClient:
@@ -83,6 +88,42 @@ class TestObserve(unittest.TestCase):
         self.assertTrue(env.snapshot()["injected"])
         env.apply_rollback(CFG, "sample-service", "svc-healthy-1")
         self.assertEqual(routed[-1], "svc-healthy-1")       # ロールバック（healthy へ）
+        self.assertFalse(env.snapshot()["injected"])
+
+
+class TestFeatureBugSelfHeal(unittest.TestCase):
+    def _env(self, serving, codes, route_sink=None):
+        return RealEnvironment(
+            CFG, services_client=FakeClient(fake_service(serving=serving, tags=FULL_TAGS)),
+            prober=lambda u, n: list(codes),
+            log_fetcher=lambda: ["Traceback (most recent call last):", "ZeroDivisionError: division by zero"],
+            route_fn=(route_sink.append if route_sink is not None else (lambda r: None)),
+        )
+
+    def test_inject_feature_bug_routes_and_attaches_source(self):
+        routed = []
+        env = self._env("svc-healthy-1", [200] * 4, route_sink=routed)
+        env.inject_feature_bug()
+        self.assertEqual(routed[-1], "svc-fb-3")            # 新機能＋バグ版へ振替
+        snap = env.snapshot()
+        self.assertEqual(snap["scenario"], "feature_bug")
+        self.assertTrue(snap["injected"])
+        self.assertIsNotNone(snap["faulty_source"])
+
+    def test_observe_feature_bug_sets_faulty_source(self):
+        env = self._env("svc-fb-3", [500] * 4)
+        obs = env.observe("sample-service")
+        self.assertEqual(obs.error_rate, 1.0)
+        self.assertIsNotNone(obs.faulty_source)
+        self.assertIsNotNone(obs.seconds_since_last_deploy)
+
+    def test_apply_code_fix_prebuilt_routes_to_fixed(self):
+        routed = []
+        env = self._env("svc-fb-3", [500] * 4, route_sink=routed)
+        env.observe("sample-service")                       # リビジョン解決
+        env.apply_code_fix(CodeFix(summary="s", fixed_source="x"))
+        self.assertEqual(routed[-1], "svc-fixed-4")         # 事前ビルド済み修正版へ振替
+        self.assertEqual(env.snapshot()["scenario"], "fixed")
         self.assertFalse(env.snapshot()["injected"])
 
 

@@ -77,6 +77,9 @@ class Config:
     # --- セーフティ ---
     dry_run: bool = field(default_factory=lambda: _get_bool("DRY_RUN", True))
     auto_act_threshold: float = field(default_factory=lambda: _get_float("AUTO_ACT_THRESHOLD", 0.8))
+    # self_heal の修正版デプロイ方式: False=事前ビルド済み 'fixed' へ振替（新IAM不要・既定）/
+    # True=ライブビルド(gcloud run deploy --source。Cloud Build 権限の追加付与が必要・要確認)。
+    self_heal_live: bool = field(default_factory=lambda: _get_bool("SELF_HEAL_LIVE", False))
 
     # --- 監視ループ / しきい値 ---
     observe_window_minutes: int = field(

@@ -15,16 +15,51 @@ const fmtTime = (iso) => {
 
 // --- 日本語ラベル ---
 const CAT_JA = {
-  bad_deploy: "不正なデプロイ", out_of_memory: "メモリ不足",
+  bad_deploy: "不正なデプロイ", feature_bug: "新機能のバグ", out_of_memory: "メモリ不足",
   dependency_5xx: "依存先の障害", crash_loop: "クラッシュループ",
   traffic_spike: "アクセス急増", unknown: "原因不明",
 };
-const ACT_JA = { rollback: "ロールバック（前リビジョンへ復帰）", escalate: "人へエスカレーション", none: "対応なし" };
+const ACT_JA = {
+  rollback: "ロールバック（前リビジョンへ復帰）",
+  self_heal: "🔧 AIコード修正（新機能は維持）",
+  escalate: "人へエスカレーション", none: "対応なし",
+};
 const OUT_JA = {
   resolved: "✅ 解決", not_resolved: "⚠️ 未解決", dry_run: "🟦 ドライラン（意図のみ）",
   escalated: "🔔 人へ通知", loop_guard: "🛡️ ループ保護で抑止", no_action: "—",
+  awaiting_approval: "⏳ 承認待ち（AI修正案）", self_healed: "✅ 自己修復（コード修正）",
+  not_resolved_rolled_back: "↩ 未解決→ロールバック退避",
 };
 const ja = (m, k) => m[k] || k || "—";
+
+function renderDiff(diff) {
+  if (!diff) return '<span class="muted">（差分なし）</span>';
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return diff.split("\n").map((l) => {
+    let cls = "";
+    if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@")) cls = "hdr";
+    else if (l.startsWith("+")) cls = "add";
+    else if (l.startsWith("-")) cls = "del";
+    return `<div class="dl ${cls}">${esc(l) || " "}</div>`;
+  }).join("");
+}
+
+function renderHeal(s) {
+  const panel = $("healPanel");
+  const heal = (s.incidents || []).find((i) => i.fix_diff);  // 最新の修正案/結果
+  if (!heal) { panel.style.display = "none"; return; }
+  panel.style.display = "block";
+  const f = heal.fix || {};
+  let pill = '<span class="pill warn">⏳ 承認待ち</span>';
+  if (heal.outcome === "self_healed") pill = '<span class="pill ok">✅ デプロイ済み・復旧を確認</span>';
+  else if (heal.outcome === "not_resolved_rolled_back") pill = '<span class="pill bad">⚠️ 修正後も未解決 → ロールバック退避</span>';
+  $("healStatus").innerHTML = pill;
+  $("healSummary").innerHTML =
+    `<b>${f.summary || "コード修正案"}</b><br>${f.bug_explanation || ""}` +
+    (f.kept_feature ? '<br><span class="ok">▶ 新機能は維持（ロールバックなら失われていた）</span>' : "");
+  $("healDiff").innerHTML = renderDiff(heal.fix_diff);
+  $("healControls").style.display = (heal.outcome === "awaiting_approval") ? "flex" : "none";
+}
 
 function spark(history) {
   const svg = $("spark");
@@ -88,13 +123,23 @@ function render(s) {
     : '<span class="muted">まだインシデントはありません。</span>';
 
   $("playbook").textContent = s.playbook || "（まだ学習データなし。インシデントを重ねると「この障害署名にはこの対応が効いた」が貯まり、次の診断に渡されます）";
+  renderHeal(s);
 }
 
 async function refresh() { try { render(await api("/api/state")); } catch (e) { /* noop */ } }
 
 $("inject").onclick = async () => { await api("/api/inject", "POST"); refresh(); };
+$("injectFeature").onclick = async () => { await api("/api/inject_feature", "POST"); refresh(); };
 $("tick").onclick = async () => { await api("/api/tick", "POST"); refresh(); };
 $("reset").onclick = async () => { await api("/api/reset", "POST"); refresh(); };
+$("approveFix").onclick = async () => {
+  const btn = $("approveFix");
+  btn.disabled = true; btn.textContent = "🔧 デプロイ中…（検証まで実行）";
+  const auto = $("auto").checked; $("auto").checked = false;
+  try { await api("/api/approve_fix", "POST"); } catch (e) { /* noop */ }
+  $("auto").checked = auto; btn.disabled = false; btn.textContent = "✅ この修正を承認してデプロイ";
+  refresh();
+};
 
 $("agentBtn").onclick = async () => {
   const btn = $("agentBtn"), out = $("agentOut");

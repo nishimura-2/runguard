@@ -90,9 +90,40 @@ def api_state():
 def api_inject():
     try:
         BACKEND.inject_fault()
-        return {"ok": True, "injected": True}
+        return {"ok": True, "injected": True, "scenario": "http500"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/inject_feature")
+def api_inject_feature():
+    """新機能＋仕込みバグ版をデプロイ（self_heal シナリオ）。ロールバックでは新機能を失う。"""
+    try:
+        BACKEND.inject_feature_bug()
+        return {"ok": True, "injected": True, "scenario": "feature_bug"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/approve_fix")
+def api_approve_fix(x_runguard_token: str = Header(default="")):
+    """承認待ちの AI 修正案を承認 → 修正版をデプロイ相当で反映 → 検証（失敗時ロールバック退避）。"""
+    _check_token(x_runguard_token)
+    incidents = STORE.list_incidents(20)
+    pending = [i for i in incidents if i.outcome == "awaiting_approval" and i.fix]
+    if not pending:
+        return {"ok": False, "error": "承認待ちの修正案がありません。先に『1サイクル実行』で検知・提案してください。"}
+    incident = max(pending, key=lambda i: i.timestamp)
+    # 冪等性: より新しい適用結果があれば再デプロイしない（連打・二重適用の防止）。
+    applied = [i for i in incidents
+               if i.outcome in ("self_healed", "not_resolved_rolled_back") and i.timestamp >= incident.timestamp]
+    if applied:
+        return {"ok": True, "already": True,
+                "incident": max(applied, key=lambda i: i.timestamp).model_dump(),
+                "backend": BACKEND.snapshot()}
+    from agent.loop import apply_self_heal
+    healed = apply_self_heal(BACKEND.service, _deps(), BACKEND, incident)
+    return {"ok": True, "incident": healed.model_dump(), "backend": BACKEND.snapshot()}
 
 
 @app.post("/api/tick")

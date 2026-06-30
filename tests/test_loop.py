@@ -9,8 +9,8 @@ from dataclasses import replace
 from agent.actions import ActionResult
 from agent.config import Config
 from agent.learn import InMemoryStore
-from agent.loop import LoopDeps, run_cycle
-from agent.models import ActionType, Category, Diagnosis, Observation
+from agent.loop import LoopDeps, apply_self_heal, run_cycle
+from agent.models import ActionType, Category, CodeFix, Diagnosis, Observation
 
 SERVICE = "sample-service"
 
@@ -67,6 +67,36 @@ def bad_deploy_diag(confidence=0.9):
                      recommended_action=ActionType.rollback)
 
 
+def feature_bug_diag(confidence=0.9):
+    return Diagnosis(category=Category.feature_bug, confidence=confidence,
+                     recommended_action=ActionType.self_heal)
+
+
+def make_feature_obs(error_rate=0.9):
+    return Observation(
+        service=SERVICE, error_rate=error_rate, request_count=500,
+        last_healthy_revision="sample-service-00001-healthy",
+        current_revision="sample-service-00003-feature-bug",
+        seconds_since_last_deploy=30,
+        recent_error_logs=["Traceback (most recent call last):", "ZeroDivisionError: division by zero"],
+        faulty_source="def handle_price(s, q):\n    return s / q\n",
+    )
+
+
+class FakeBackend:
+    """apply_self_heal 用の最小バックエンド。"""
+
+    def __init__(self):
+        self.applied = None
+        self.rolled = None
+
+    def apply_code_fix(self, fix):
+        self.applied = fix
+
+    def apply_rollback(self, cfg, service, revision):
+        self.rolled = revision
+
+
 class TestRunCycle(unittest.TestCase):
     def test_healthy_cycle_no_incident(self):
         store = InMemoryStore()
@@ -120,6 +150,56 @@ class TestRunCycle(unittest.TestCase):
         second = run_cycle(SERVICE, deps2)
         self.assertEqual(second.outcome, "loop_guard")
         self.assertEqual(len(store.list_incidents()), 2)
+
+
+class TestSelfHeal(unittest.TestCase):
+    def _propose_deps(self, store, fix, diff="DIFF"):
+        return LoopDeps(
+            observe=SequenceObserve(make_feature_obs()),
+            llm=FakeLLM(feature_bug_diag()), store=store, cfg=cfg(dry_run=False),
+            fix_generator=lambda o, d: (fix, diff),
+        )
+
+    def test_propose_awaiting_approval_once(self):
+        store = InMemoryStore()
+        fix = CodeFix(summary="0除算ガード", fixed_source="def handle_price(s, q):\n    if q<=0: return {}\n    return s/q\n")
+        inc = run_cycle(SERVICE, self._propose_deps(store, fix))
+        self.assertEqual(inc.outcome, "awaiting_approval")
+        self.assertIsNotNone(inc.fix)
+        self.assertEqual(inc.fix_diff, "DIFF")
+        self.assertEqual(inc.decision.action, ActionType.self_heal)
+        self.assertTrue(inc.decision.requires_human)
+        # 承認待ちの間は再提案しない（毎ティックの再生成を防ぐ）
+        self.assertIsNone(run_cycle(SERVICE, self._propose_deps(store, fix, diff="DIFF2")))
+        self.assertEqual(len(store.list_incidents()), 1)
+        # 提案だけでは playbook に計上しない（承認・適用で初めて記録）
+        self.assertNotIn("feature_bug -> self_heal", store.playbook_context())
+
+    def test_apply_self_heal_resolves(self):
+        store = InMemoryStore()
+        fix = CodeFix(summary="s", fixed_source="fixed source")
+        proposed = run_cycle(SERVICE, self._propose_deps(store, fix))
+        backend = FakeBackend()
+        # 適用後の観測は復旧（er=0）
+        deps2 = LoopDeps(observe=SequenceObserve(make_obs(0.0)), llm=FakeLLM(feature_bug_diag()),
+                         store=store, cfg=cfg(dry_run=False))
+        healed = apply_self_heal(SERVICE, deps2, backend, proposed)
+        self.assertEqual(healed.outcome, "self_healed")
+        self.assertEqual(backend.applied, fix)
+        self.assertIsNone(backend.rolled)
+        self.assertIn("feature_bug -> self_heal", store.playbook_context())
+
+    def test_apply_self_heal_fallback_rollback(self):
+        store = InMemoryStore()
+        fix = CodeFix(summary="s", fixed_source="still broken")
+        proposed = run_cycle(SERVICE, self._propose_deps(store, fix))
+        backend = FakeBackend()
+        # 適用後も未復旧（er=0.9）→ 正常版へロールバック退避
+        deps2 = LoopDeps(observe=SequenceObserve(make_feature_obs()), llm=FakeLLM(feature_bug_diag()),
+                         store=store, cfg=cfg(dry_run=False))
+        healed = apply_self_heal(SERVICE, deps2, backend, proposed)
+        self.assertEqual(healed.outcome, "not_resolved_rolled_back")
+        self.assertEqual(backend.rolled, "sample-service-00001-healthy")
 
 
 if __name__ == "__main__":

@@ -63,6 +63,26 @@ class TestDecide(unittest.TestCase):
         d = decide(diag(Category.out_of_memory, 0.95), obs(), CFG)
         self.assertEqual(d.action, ActionType.escalate)
 
+    def test_feature_bug_with_source_self_heals(self):
+        o = obs()
+        o.faulty_source = "def handle_price(s, q):\n    return s / q\n"
+        d = decide(diag(Category.feature_bug, 0.9), o, CFG)
+        self.assertEqual(d.action, ActionType.self_heal)
+        self.assertTrue(d.requires_human)             # コード出荷は必ず承認ゲート
+        self.assertEqual(d.target_service, "sample-service")
+
+    def test_feature_bug_without_source_escalates(self):
+        d = decide(diag(Category.feature_bug, 0.95), obs(), CFG)  # faulty_source なし
+        self.assertEqual(d.action, ActionType.escalate)
+        self.assertIn("ソース", d.reason)
+
+    def test_feature_bug_low_confidence_escalates(self):
+        o = obs()
+        o.faulty_source = "x"
+        d = decide(diag(Category.feature_bug, 0.5), o, CFG)
+        self.assertEqual(d.action, ActionType.escalate)
+        self.assertIn("確信度", d.reason)
+
     def test_crash_loop_recent_deploy_rolls_back(self):
         d = decide(diag(Category.crash_loop, 0.9), obs(seconds_since_deploy=120), CFG)
         self.assertEqual(d.action, ActionType.rollback)
