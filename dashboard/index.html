@@ -71,8 +71,8 @@ button.feature{background:#bb8009;border-color:#bb8009;color:#fff;font-weight:60
         <b>正常版(healthy)</b>: <span id="healthyRev">—</span><br>
         <b>不調版(bad)</b>: <span id="badRev">—</span> <span class="tag">FAULT=http500</span><br>
         <b>⚠️ 障害を注入(http500)</b> → 悪いデプロイ → エージェントは<b>ロールバック</b>（前リビジョンへ復帰）。<br>
-        <b>🆕 新機能＋バグ投入</b> → 新機能のコードにバグ（0除算）→ ロールバックでは<b>新機能を失う</b>ため、
-        エージェントは<b>コードを修正(self-heal)</b>して新リビジョンを提案 → 人が差分を承認 → デプロイで復旧。
+        <b>🆕 新機能＋バグ投入</b> → 新機能のコードにバグ（0除算）→ エージェントはまず<b>即時ロールバックで止血</b>（新機能は一時停止）し、
+        <b>バグだけ直す修正(self-heal)</b>を提案 → 人が差分を承認 → <b>新機能入りの修正版</b>をデプロイ。
       </div>
     </div>
     <div class="panel">

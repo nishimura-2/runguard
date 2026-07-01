@@ -74,7 +74,8 @@ class TestAdkTools(unittest.TestCase):
         self.assertEqual(info["recommended_action"], "self_heal")
         res = propose_fix(c, be, deps, ctx)
         self.assertEqual(res["action"], "self_heal")
-        self.assertEqual(res["outcome"], "awaiting_approval")
+        self.assertEqual(res["outcome"], "rolled_back_awaiting_fix")   # まず止血
+        self.assertEqual(be.snapshot()["scenario"], "healthy")         # 承認待ちでも健全
         self.assertEqual(len(store.list_incidents()), 1)
         self.assertIsNotNone(store.list_incidents()[0].fix)
 

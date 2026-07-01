@@ -141,9 +141,10 @@ def api_approve_fix(x_runguard_token: str = Header(default="")):
     """承認待ちの AI 修正案を承認 → 修正版をデプロイ相当で反映 → 検証（失敗時ロールバック退避）。"""
     _check_token(x_runguard_token)
     incidents = STORE.list_incidents(20)
-    pending = [i for i in incidents if i.outcome == "awaiting_approval" and i.fix]
+    pending = [i for i in incidents
+               if i.outcome in ("awaiting_approval", "rolled_back_awaiting_fix") and i.fix]
     if not pending:
-        return {"ok": False, "error": "承認待ちの修正案がありません。先に『1サイクル実行』で検知・提案してください。"}
+        return {"ok": False, "error": "承認待ちの修正案がありません。先に点検で検知・提案してください。"}
     incident = max(pending, key=lambda i: i.timestamp)
     # 冪等性: より新しい適用結果があれば再デプロイしない（連打・二重適用の防止）。
     applied = [i for i in incidents

@@ -37,7 +37,7 @@
 `observe（HTTPプローブ + Cloud Logging）→ diagnose（Gemini 構造化出力）→ decide（カテゴリ→対応＋確信度ゲート）→ act（Cloud Run Admin API）→ verify（再観測）→ learn（Firestore プレイブック）`
 
 - **decide のカテゴリ→対応表**: bad_deploy / crash_loop(直近)→`rollback`、out_of_memory→`scale_memory`、traffic_spike→`scale_instances`、crash_loop(それ以外)→`restart`、**feature_bug→`self_heal`（人の承認ゲート）**、それ以外→`escalate`。
-- **self_heal の2段**: ①提案（`selfheal.generate_fix` が Gemini 構造化出力でバグだけ修正した完全ソースを生成、`difflib` で差分化。オフラインは定型修正へ退避）→ ②承認後に適用（既定は事前ビルド済み `fixed` リビジョンへ振替、検証、失敗時ロールバック退避）。
+- **self_heal の3段**: ①**即時ロールバックで止血**（正常版へ戻す＝承認待ちの間も健全）→ ②修正案生成（`selfheal.generate_fix` が Gemini 構造化出力でバグだけ修正した完全ソースを生成、`difflib` で差分化。オフラインは定型修正へ退避。outcome=`rolled_back_awaiting_fix`）→ ③**人が承認**後に修正版をデプロイ（既定は事前ビルド済み `fixed` リビジョンへ振替）、検証、失敗時はロールバック退避。
 
 ## コンポーネント
 

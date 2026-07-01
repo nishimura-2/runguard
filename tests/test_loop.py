@@ -6,11 +6,12 @@ loop.run_cycle を InMemoryStore とモック observe/llm/executor で検証す�
 import unittest
 from dataclasses import replace
 
-from agent.actions import ActionResult
+from agent.actions import ActionResult, execute
 from agent.config import Config
 from agent.learn import InMemoryStore
 from agent.loop import LoopDeps, apply_self_heal, run_cycle
-from agent.models import ActionType, Category, CodeFix, Diagnosis, Observation
+from agent.models import ActionType, Category, CodeFix, Decision, Diagnosis, Incident, Observation
+from agent.sim import SimEnvironment
 
 SERVICE = "sample-service"
 
@@ -153,51 +154,57 @@ class TestRunCycle(unittest.TestCase):
 
 
 class TestSelfHeal(unittest.TestCase):
-    def _propose_deps(self, store, fix, diff="DIFF"):
+    """新仕様: feature_bug は『即時ロールバックで止血 → 修正を提案 → 承認でデプロイ』。"""
+
+    def _sim_deps(self, be, store, fix):
+        # SimEnvironment を backend にして、止血ロールバックも本当に実行させる。
         return LoopDeps(
-            observe=SequenceObserve(make_feature_obs()),
-            llm=FakeLLM(feature_bug_diag()), store=store, cfg=cfg(dry_run=False),
-            fix_generator=lambda o, d: (fix, diff),
+            observe=be.observe, llm=FakeLLM(feature_bug_diag()), store=store, cfg=cfg(dry_run=False),
+            executor=lambda d, c, **kw: execute(d, c, backend=be, **kw),
+            fix_generator=lambda o, d: (fix, "DIFF"),
         )
 
-    def test_propose_awaiting_approval_once(self):
-        store = InMemoryStore()
-        fix = CodeFix(summary="0除算ガード", fixed_source="def handle_price(s, q):\n    if q<=0: return {}\n    return s/q\n")
-        inc = run_cycle(SERVICE, self._propose_deps(store, fix))
-        self.assertEqual(inc.outcome, "awaiting_approval")
-        self.assertIsNotNone(inc.fix)
-        self.assertEqual(inc.fix_diff, "DIFF")
+    def test_rollback_first_then_awaiting_fix(self):
+        be, store = SimEnvironment(service=SERVICE), InMemoryStore()
+        fix = CodeFix(summary="0除算ガード", fixed_source="def handle_price(s,q):\n    if q<=0: return {}\n    return s/q\n")
+        be.inject_feature_bug()
+        inc = run_cycle(SERVICE, self._sim_deps(be, store, fix))
+        self.assertEqual(inc.outcome, "rolled_back_awaiting_fix")
         self.assertEqual(inc.decision.action, ActionType.self_heal)
         self.assertTrue(inc.decision.requires_human)
-        # 承認待ちの間は再提案しない（毎ティックの再生成を防ぐ）
-        self.assertIsNone(run_cycle(SERVICE, self._propose_deps(store, fix, diff="DIFF2")))
-        self.assertEqual(len(store.list_incidents()), 1)
+        self.assertEqual(inc.fix_diff, "DIFF")
+        # 止血できている: 正常版に戻り健全（承認待ちの間も安全）
+        self.assertEqual(be.snapshot()["scenario"], "healthy")
+        self.assertEqual(be.snapshot()["error_rate"], 0.0)
         # 提案だけでは playbook に計上しない（承認・適用で初めて記録）
         self.assertNotIn("feature_bug -> self_heal", store.playbook_context())
 
-    def test_apply_self_heal_resolves(self):
-        store = InMemoryStore()
-        fix = CodeFix(summary="s", fixed_source="fixed source")
-        proposed = run_cycle(SERVICE, self._propose_deps(store, fix))
-        backend = FakeBackend()
-        # 適用後の観測は復旧（er=0）
-        deps2 = LoopDeps(observe=SequenceObserve(make_obs(0.0)), llm=FakeLLM(feature_bug_diag()),
-                         store=store, cfg=cfg(dry_run=False))
-        healed = apply_self_heal(SERVICE, deps2, backend, proposed)
+    def test_approve_deploys_fixed_with_feature(self):
+        be, store = SimEnvironment(service=SERVICE), InMemoryStore()
+        fix = CodeFix(summary="s", fixed_source="fixed")
+        be.inject_feature_bug()
+        deps = self._sim_deps(be, store, fix)
+        proposed = run_cycle(SERVICE, deps)
+        healed = apply_self_heal(SERVICE, deps, be, proposed)
         self.assertEqual(healed.outcome, "self_healed")
-        self.assertEqual(backend.applied, fix)
-        self.assertIsNone(backend.rolled)
+        self.assertEqual(be.snapshot()["current_revision"], be.fixed_rev)  # 新機能入りの修正版が配信
+        self.assertEqual(be.snapshot()["error_rate"], 0.0)
         self.assertIn("feature_bug -> self_heal", store.playbook_context())
 
     def test_apply_self_heal_fallback_rollback(self):
+        # 修正を当てても直らないケース → 正常版へロールバック退避
         store = InMemoryStore()
-        fix = CodeFix(summary="s", fixed_source="still broken")
-        proposed = run_cycle(SERVICE, self._propose_deps(store, fix))
+        proposed = Incident(
+            id="p1", timestamp="2026-06-25T01:00:00+00:00",
+            observation=make_feature_obs(), diagnosis=feature_bug_diag(),
+            decision=Decision(action=ActionType.self_heal, target_service=SERVICE, requires_human=True),
+            outcome="rolled_back_awaiting_fix",
+            fix=CodeFix(summary="s", fixed_source="still broken"), fix_diff="d",
+        )
         backend = FakeBackend()
-        # 適用後も未復旧（er=0.9）→ 正常版へロールバック退避
-        deps2 = LoopDeps(observe=SequenceObserve(make_feature_obs()), llm=FakeLLM(feature_bug_diag()),
-                         store=store, cfg=cfg(dry_run=False))
-        healed = apply_self_heal(SERVICE, deps2, backend, proposed)
+        deps = LoopDeps(observe=SequenceObserve(make_feature_obs()), llm=FakeLLM(feature_bug_diag()),
+                        store=store, cfg=cfg(dry_run=False))
+        healed = apply_self_heal(SERVICE, deps, backend, proposed)
         self.assertEqual(healed.outcome, "not_resolved_rolled_back")
         self.assertEqual(backend.rolled, "sample-service-00001-healthy")
 

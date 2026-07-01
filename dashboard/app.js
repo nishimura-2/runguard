@@ -31,6 +31,7 @@ const OUT_JA = {
   resolved: "✅ 解決", not_resolved: "⚠️ 未解決", dry_run: "🟦 ドライラン（意図のみ）",
   escalated: "🔔 人へ通知", loop_guard: "🛡️ ループ保護で抑止", no_action: "—",
   awaiting_approval: "⏳ 承認待ち（AI修正案）", self_healed: "✅ 自己修復（コード修正）",
+  rolled_back_awaiting_fix: "↩️ 一時ロールバック済み → 🔧 修正の承認待ち",
   not_resolved_rolled_back: "↩ 未解決→ロールバック退避",
 };
 const ja = (m, k) => m[k] || k || "—";
@@ -62,17 +63,27 @@ function renderHeal(s) {
   if (!heal) { panel.style.display = "none"; return; }
   panel.style.display = "block";
   const f = heal.fix || {};
+  const pending = (heal.outcome === "awaiting_approval" || heal.outcome === "rolled_back_awaiting_fix");
   let pill = '<span class="pill warn">⏳ 承認待ち</span>';
   if (heal.outcome === "self_healed") pill = '<span class="pill ok">✅ デプロイ済み・復旧を確認</span>';
   else if (heal.outcome === "not_resolved_rolled_back") pill = '<span class="pill bad">⚠️ 修正後も未解決 → ロールバック退避</span>';
+  else if (heal.outcome === "rolled_back_awaiting_fix") pill = '<span class="pill ok">↩️ 一時ロールバックで復旧済み</span> <span class="pill warn">🔧 修正の承認待ち</span>';
   const tag = `<span class="muted" style="margin-left:8px">対象インシデント: ${ja(CAT_JA, heal.diagnosis.category)} ／ ${fmtTime(heal.timestamp)}</span>`;
   $("healStatus").innerHTML = pill + tag;
+  const interim = (heal.outcome === "rolled_back_awaiting_fix")
+    ? '<div class="warn" style="margin-top:6px">いまは正常版で稼働中（新機能は一時停止）。<b>「承認してデプロイ」</b>で新機能入りの修正版に切り替えます。</div>'
+    : "";
+  const feat = f.kept_feature
+    ? (pending
+        ? '<div class="ok" style="margin-top:6px">▶ 承認すると新機能を復元しつつバグ修正（今は一時停止中）</div>'
+        : '<div class="ok" style="margin-top:6px">▶ 新機能は維持（ロールバックだけなら失われていた）</div>')
+    : "";
   $("healSummary").innerHTML =
     `<div><b>🔴 問題（${ja(CAT_JA, heal.diagnosis.category)}）:</b> ${escHtml(f.bug_explanation || "新機能のコードにバグ（例: 0除算）で 5xx。")}</div>` +
     `<div style="margin-top:6px"><b>🟢 こう直す:</b> ${escHtml(f.summary || "バグ箇所だけを修正。")}</div>` +
-    (f.kept_feature ? '<div class="ok" style="margin-top:6px">▶ 新機能は維持（ロールバックなら失われていた）</div>' : "");
+    interim + feat;
   $("healDiff").innerHTML = renderDiff(heal.fix_diff);
-  $("healControls").style.display = (heal.outcome === "awaiting_approval") ? "flex" : "none";
+  $("healControls").style.display = pending ? "flex" : "none";
 }
 
 function spark(nums) {

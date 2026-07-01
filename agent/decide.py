@@ -75,8 +75,8 @@ def _decide_self_heal(
         target_revision=obs.current_revision,   # 参考: 修正対象の不調リビジョン
         reason=(
             f"{diagnosis.category.value}（確信度 {diagnosis.confidence:.2f}）: "
-            "ロールバックでは新機能を失うため、AI がバグだけを修正した新リビジョンを提案。"
-            "コードを出荷するため人の承認後にデプロイ。"
+            "まず即時ロールバックで止血し（新機能は一時停止）、AI がバグだけを修正した新リビジョンを提案。"
+            "人が承認すると新機能入りの修正版をデプロイする。"
         ),
         requires_human=True,   # self_heal はコードを出荷する → 必ず承認ゲートを通す
         dry_run=dry_run,

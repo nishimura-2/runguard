@@ -18,7 +18,7 @@ from agent.decide import decide
 from agent.diagnose import diagnose
 from agent.gemini_client import LLMClient
 from agent.learn import IncidentStore
-from agent.models import ActionType, Diagnosis, Incident, Observation
+from agent.models import ActionType, Decision, Diagnosis, Incident, Observation
 from agent.selfheal import build_fix_and_diff
 from agent.verify import verify_outcome
 
@@ -140,15 +140,25 @@ def _propose_self_heal(
     実デプロイはしない（人の承認ゲート）。承認は apply_self_heal で行う。
     同じ障害エピソードで毎ティック再生成しないよう、提案済みなら何もしない。
     """
+    cfg = deps.cfg
     actions_taken, _ = deps.store.recent_action_stats(service, now)
     if actions_taken >= 1:
-        return None  # 既に修正案を提示済み（承認待ち）。UI はストアの提案を表示し続ける。
+        return None  # 既に対応済み（止血＋修正案提示済み）。UI はストアの提案を表示し続ける。
 
+    # 1) まず即時ロールバックで“出血を止める”（新機能は一時停止するがサービスは健全化＝承認待ちの間も安全）。
+    rolled_back = False
+    if obs.last_healthy_revision:
+        rb = Decision(action=ActionType.rollback, target_service=service,
+                      target_revision=obs.last_healthy_revision, requires_human=False, dry_run=cfg.dry_run)
+        rb_res = deps.executor(rb, cfg, actions_taken_this_incident=0, seconds_since_last_action=None)
+        rolled_back = rb_res.action == ActionType.rollback and rb_res.skipped_reason is None
+
+    # 2) 新機能を維持したままバグだけ直す修正案を生成（デプロイは人の承認後）。
     gen = deps.fix_generator or (
         lambda o, d: build_fix_and_diff(o.faulty_source or "", o.recent_error_logs, deps.llm)
     )
     fix, diff = gen(obs, diagnosis)
-    deps.store.record_action(service, now)  # 提案済みマーク（再生成・連打抑止）
+    deps.store.record_action(service, now)  # 対応済みマーク（再生成・連打抑止）
 
     incident = Incident(
         id=deps.new_id(),
@@ -156,7 +166,8 @@ def _propose_self_heal(
         observation=obs,
         diagnosis=diagnosis,
         decision=decision,
-        outcome="awaiting_approval",
+        # 止血できていれば「一時ロールバック済み＋修正の承認待ち」、できなければ従来どおり承認待ち。
+        outcome="rolled_back_awaiting_fix" if rolled_back else "awaiting_approval",
         context_used=context or "",
         fix=fix,
         fix_diff=diff,
