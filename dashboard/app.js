@@ -138,7 +138,6 @@ $("inject").onclick = async () => { await api("/api/inject", "POST"); refresh();
 $("injectFeature").onclick = async () => { await api("/api/inject_feature", "POST"); refresh(); };
 $("injectOom").onclick = async () => { await api("/api/inject_oom", "POST"); refresh(); };
 $("injectTraffic").onclick = async () => { await api("/api/inject_traffic", "POST"); refresh(); };
-$("tick").onclick = async () => { await api("/api/tick", "POST"); refresh(); };
 $("reset").onclick = async () => { await api("/api/reset", "POST"); refresh(); };
 $("approveFix").onclick = async () => {
   const btn = $("approveFix");
@@ -149,22 +148,31 @@ $("approveFix").onclick = async () => {
   refresh();
 };
 
-$("agentBtn").onclick = async () => {
+let agentBusy = false;
+async function runAgent() {
+  if (agentBusy) return;
+  agentBusy = true;
   const btn = $("agentBtn"), out = $("agentOut");
-  btn.disabled = true; const auto = $("auto").checked; $("auto").checked = false;
-  out.style.display = "block"; out.textContent = "🤖 ADK エージェント実行中…（観測→判断→必要ならロールバック）";
+  btn.disabled = true;
+  out.style.display = "block";
+  out.textContent = "🤖 ADK エージェント実行中…（観測→診断→対応）";
   try {
     const r = await api("/api/agent", "POST");
-    if (r.ok) {
-      const steps = (r.steps || []).map((s) => `・${s.tool}(${Object.entries(s.args || {}).map(([k, v]) => `${k}=${v}`).join(", ")})`).join("\n");
-      out.textContent = `🤖 ADK エージェントが実行した手順:\n${steps || "（ツール呼び出しなし）"}\n\n最終回答:\n${r.final || ""}`;
-    } else {
-      out.textContent = "エラー: " + r.error;
-    }
+    const eng = r.engine === "adk" ? "ADK エージェント" : "確定パイプライン（フォールバック）";
+    const steps = (r.steps || [])
+      .map((s) => `・${s.tool}(${Object.entries(s.args || {}).map(([k, v]) => `${k}=${v}`).join(", ")})`)
+      .join("\n");
+    let txt = `🤖 ${eng}が実行`;
+    if (r.steps && r.steps.length) txt += `\n\n呼び出したツール:\n${steps}`;
+    if (r.final) txt += `\n\n最終回答:\n${r.final}`;
+    if (r.note) txt += `\n\n（${r.note}）`;
+    out.textContent = txt;
   } catch (e) { out.textContent = "通信エラー: " + e; }
-  btn.disabled = false; $("auto").checked = auto; refresh();
-};
+  btn.disabled = false; agentBusy = false; refresh();
+}
+$("agentBtn").onclick = runAgent;
 
 setInterval(refresh, 1500);
-setInterval(async () => { if ($("auto").checked) { await api("/api/tick", "POST"); refresh(); } }, 2500);
+// 自動巡回も同じ ADK 主動線を駆動（重いので間隔広め＋多重起動ガード）。
+setInterval(() => { if ($("auto").checked) runAgent(); }, 6000);
 refresh();

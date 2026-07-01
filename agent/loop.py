@@ -69,6 +69,23 @@ def run_cycle(service: str, deps: LoopDeps) -> Optional[Incident]:
     if decision.action == ActionType.self_heal:
         return _propose_self_heal(service, obs, diagnosis, decision, context, deps, now)
 
+    return execute_and_record(service, obs, diagnosis, decision, context, deps, now)
+
+
+def execute_and_record(
+    service: str,
+    obs: Observation,
+    diagnosis: Diagnosis,
+    decision,
+    context: str,
+    deps: LoopDeps,
+    now: str,
+) -> Incident:
+    """Decision を実行（ガード付き）→ ライブなら再観測で検証 → インシデント記録。
+
+    run_cycle（確定パイプライン）と adk_app（ADK 駆動）の双方から使う共通ルーチン。
+    """
+    cfg = deps.cfg
     actions_taken, secs_since = deps.store.recent_action_stats(service, now)
     result = deps.executor(
         decision,

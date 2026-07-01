@@ -166,14 +166,21 @@ def api_reset():
 
 @app.post("/api/agent")
 async def api_agent(x_runguard_token: str = Header(default="")):
-    """ADK の LlmAgent を実走させ、LLM 主導で観測→（必要なら）ロールバックを行う。"""
+    """単一の主動線。ADK エージェントが観測→診断→対応（rollback/scale/restart/コード修正提案）を駆動する。
+
+    ADK/Gemini が使えない環境（オフライン等）では確定パイプライン run_cycle へ自動フォールバックし、
+    動線・結果（インシデント記録）は同一に保つ＝デモが止まらない。
+    """
     _check_token(x_runguard_token)
     try:
-        from agent.adk_app import run_agent
-        result = await run_agent(
-            RUN_CFG, BACKEND,
-            f"{BACKEND.service} を点検し、悪いデプロイなら正常リビジョンへロールバックして。",
-        )
-        return {"ok": True, **result, "backend": BACKEND.snapshot()}
+        from agent.adk_app import run_agent_cycle
+        result = await run_agent_cycle(RUN_CFG, BACKEND, STORE, LLM, ELASTIC, SLEEP)
+        return {"ok": True, "engine": "adk", **result, "backend": BACKEND.snapshot()}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        incident = run_cycle(BACKEND.service, _deps())
+        return {
+            "ok": True, "engine": "fallback", "note": f"ADK 不可のため確定パイプラインで実行: {e}",
+            "steps": [], "final": None,
+            "incident": incident.model_dump() if incident else None,
+            "backend": BACKEND.snapshot(),
+        }

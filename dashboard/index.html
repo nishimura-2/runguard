@@ -87,10 +87,14 @@ button.feature{background:#bb8009;border-color:#bb8009;color:#fff;font-weight:60
         <button class="feature" id="injectTraffic">📈 アクセス急増</button>
       </div>
       <div class="controls" style="margin-top:8px">
-        <button id="tick">▶ 1サイクル実行</button>
-        <button class="agent" id="agentBtn">🤖 AIに任せる(ADK)</button>
+        <span class="muted">対応:</span>
+        <button class="agent" id="agentBtn">🤖 AIエージェントで点検 (ADK)</button>
         <button id="reset">↺ リセット</button>
-        <label class="muted"><input type="checkbox" id="auto" checked> 自動巡回</label>
+        <label class="muted"><input type="checkbox" id="auto" checked> 自動巡回（ADK）</label>
+      </div>
+      <div class="note" style="border-top:none;padding-top:4px">
+        点検は<b>ADKエージェント</b>が観測→診断→対応（ロールバック／メモリ増／インスタンス増／再起動／コード修正提案）を駆動。
+        Gemini/ADK が使えない環境では確定パイプラインへ自動フォールバック。
       </div>
       <div id="agentOut" class="ctx" style="display:none"></div>
     </div>
