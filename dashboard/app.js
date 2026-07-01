@@ -49,14 +49,18 @@ function renderDiff(diff) {
 
 function renderHeal(s) {
   const panel = $("healPanel");
-  const heal = (s.incidents || []).find((i) => i.fix_diff);  // 最新の修正案/結果
+  // 最新インシデントが self-heal（コード修正）のときだけ表示。別対応(rollback等)をしたら隠す
+  // ＝タイムライン最上段と必ず一致し、誤読を防ぐ。
+  const latest = (s.incidents || [])[0];
+  const heal = (latest && latest.fix_diff) ? latest : null;
   if (!heal) { panel.style.display = "none"; return; }
   panel.style.display = "block";
   const f = heal.fix || {};
   let pill = '<span class="pill warn">⏳ 承認待ち</span>';
   if (heal.outcome === "self_healed") pill = '<span class="pill ok">✅ デプロイ済み・復旧を確認</span>';
   else if (heal.outcome === "not_resolved_rolled_back") pill = '<span class="pill bad">⚠️ 修正後も未解決 → ロールバック退避</span>';
-  $("healStatus").innerHTML = pill;
+  const tag = `<span class="muted" style="margin-left:8px">対象インシデント: ${ja(CAT_JA, heal.diagnosis.category)} ／ ${fmtTime(heal.timestamp)}</span>`;
+  $("healStatus").innerHTML = pill + tag;
   $("healSummary").innerHTML =
     `<b>${f.summary || "コード修正案"}</b><br>${f.bug_explanation || ""}` +
     (f.kept_feature ? '<br><span class="ok">▶ 新機能は維持（ロールバックなら失われていた）</span>' : "");
