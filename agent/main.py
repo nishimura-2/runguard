@@ -86,10 +86,18 @@ def api_state():
     }
 
 
+def _fresh_incident() -> None:
+    """新しい障害を注入したら、直前の対応で立ったループ保護（クールダウン/最大アクション数）を
+    リセットして『別インシデント』として扱う。連続シナリオを詰まらせないためのデモ配慮。
+    （同一障害の連打に対する抑止は、点検を繰り返せば引き続き発動する。）"""
+    STORE.mark_healthy(BACKEND.service)
+
+
 @app.post("/api/inject")
 def api_inject():
     try:
         BACKEND.inject_fault()
+        _fresh_incident()
         return {"ok": True, "injected": True, "scenario": "http500"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -100,6 +108,7 @@ def api_inject_feature():
     """新機能＋仕込みバグ版をデプロイ（self_heal シナリオ）。ロールバックでは新機能を失う。"""
     try:
         BACKEND.inject_feature_bug()
+        _fresh_incident()
         return {"ok": True, "injected": True, "scenario": "feature_bug"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -110,6 +119,7 @@ def api_inject_oom():
     """メモリ逼迫（OOM）を注入 → エージェントはメモリ上限を引き上げて復旧。"""
     try:
         BACKEND.inject_oom()
+        _fresh_incident()
         return {"ok": True, "injected": True, "scenario": "oom"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -120,6 +130,7 @@ def api_inject_traffic():
     """アクセス急増を注入 → エージェントは max-instances を増やして復旧。"""
     try:
         BACKEND.inject_traffic_spike()
+        _fresh_incident()
         return {"ok": True, "injected": True, "scenario": "traffic_spike"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
