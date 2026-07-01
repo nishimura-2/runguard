@@ -34,6 +34,12 @@ const OUT_JA = {
   not_resolved_rolled_back: "↩ 未解決→ロールバック退避",
 };
 const ja = (m, k) => m[k] || k || "—";
+const escHtml = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// タイムラインの展開状態（インシデントid）と、グラフ用のクライアント側サンプリング履歴。
+const expanded = new Set();
+let lastTimelineSig = "";
+let clientHist = [];
 
 function renderDiff(diff) {
   if (!diff) return '<span class="muted">（差分なし）</span>';
@@ -62,23 +68,25 @@ function renderHeal(s) {
   const tag = `<span class="muted" style="margin-left:8px">対象インシデント: ${ja(CAT_JA, heal.diagnosis.category)} ／ ${fmtTime(heal.timestamp)}</span>`;
   $("healStatus").innerHTML = pill + tag;
   $("healSummary").innerHTML =
-    `<b>${f.summary || "コード修正案"}</b><br>${f.bug_explanation || ""}` +
-    (f.kept_feature ? '<br><span class="ok">▶ 新機能は維持（ロールバックなら失われていた）</span>' : "");
+    `<div><b>🔴 問題（${ja(CAT_JA, heal.diagnosis.category)}）:</b> ${escHtml(f.bug_explanation || "新機能のコードにバグ（例: 0除算）で 5xx。")}</div>` +
+    `<div style="margin-top:6px"><b>🟢 こう直す:</b> ${escHtml(f.summary || "バグ箇所だけを修正。")}</div>` +
+    (f.kept_feature ? '<div class="ok" style="margin-top:6px">▶ 新機能は維持（ロールバックなら失われていた）</div>' : "");
   $("healDiff").innerHTML = renderDiff(heal.fix_diff);
   $("healControls").style.display = (heal.outcome === "awaiting_approval") ? "flex" : "none";
 }
 
-function spark(history) {
+function spark(nums) {
   const svg = $("spark");
-  if (!history || !history.length) { svg.innerHTML = ""; return; }
-  const n = history.length;
-  const pts = history.map((h, i) => {
-    const x = (n === 1 ? 0 : (i / (n - 1)) * 300);
-    const y = 80 - Math.max(0, Math.min(1, h.error_rate)) * 78 - 1;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
-  const last = history[history.length - 1].error_rate;
-  svg.innerHTML = `<polyline fill="none" stroke="${last > 0.1 ? "#f85149" : "#2ea043"}" stroke-width="2" points="${pts}"/>`;
+  if (!nums || !nums.length) { svg.innerHTML = ""; return; }
+  const n = nums.length;
+  const yOf = (v) => 80 - Math.max(0, Math.min(1, v)) * 78 - 1;
+  const last = nums[n - 1];
+  const color = last > 0.1 ? "#f85149" : "#2ea043";
+  const pts = nums.map((v, i) => `${(n === 1 ? 150 : (i / (n - 1)) * 300).toFixed(1)},${yOf(v).toFixed(1)}`).join(" ");
+  // 現在値の点（自動巡回オフでも注入直後に「点」で見えるように）＋折れ線。
+  const dot = `<circle cx="${(n === 1 ? 150 : 300).toFixed(1)}" cy="${yOf(last).toFixed(1)}" r="3.5" fill="${color}"/>`;
+  const line = n > 1 ? `<polyline fill="none" stroke="${color}" stroke-width="2" points="${pts}"/>` : "";
+  svg.innerHTML = line + dot;
 }
 
 function revRole(b) {
@@ -86,6 +94,64 @@ function revRole(b) {
   if (cur && cur === b.healthy_revision) return '<span class="ok">正常版</span>';
   if (cur && cur === b.bad_revision) return '<span class="bad">不調版</span>';
   return "";
+}
+
+// タイムラインの1行を開いたときに出す詳細（何を観測し、どう診断し、何をしたか）。
+function incidentDetailHTML(i) {
+  const d = i.diagnosis, dec = i.decision, o = i.observation || {};
+  let h =
+    `<div class="kv"><span>診断</span><span><b>${ja(CAT_JA, d.category)}</b>（確信度 ${(d.confidence * 100).toFixed(0)}%）</span></div>` +
+    `<div class="kv"><span>アクション</span><span>${ja(ACT_JA, dec.action)}</span></div>` +
+    `<div class="kv"><span>結果</span><span>${ja(OUT_JA, i.outcome)}</span></div>` +
+    `<div class="kv"><span>5xxエラー率</span><span>${(Math.round((o.error_rate || 0) * 100))}%</span></div>`;
+  if (d.reasoning) h += `<div class="muted" style="margin-top:6px">🔎 診断理由: ${escHtml(d.reasoning)}</div>`;
+  if (dec.reason) h += `<div class="muted" style="margin-top:4px">🧭 判断: ${escHtml(dec.reason)}</div>`;
+  if (o.recent_error_logs && o.recent_error_logs.length) {
+    h += `<div class="ctx">🧾 エラーログ\n${escHtml(o.recent_error_logs.join("\n"))}</div>`;
+  }
+  if (i.context_used && i.context_used.trim()) {
+    h += `<div class="ctx">📚 参照した過去の知見\n${escHtml(i.context_used)}</div>`;
+  }
+  if (i.fix) {
+    const f = i.fix;
+    h += `<div style="margin-top:10px"><b>🔧 AI によるコード自己修復（self-heal）</b></div>` +
+      `<div class="muted" style="margin-top:4px">🔴 問題: ${escHtml(f.bug_explanation || "")}</div>` +
+      `<div class="muted" style="margin-top:2px">🟢 こう直す: ${escHtml(f.summary || "")}${f.kept_feature ? " ／ 新機能は維持" : ""}</div>` +
+      `<div class="diff" style="max-height:260px">${renderDiff(i.fix_diff)}</div>`;
+  }
+  return h;
+}
+
+function incidentRowHTML(i) {
+  return `<div class="inc ${i.outcome || ""}" data-id="${i.id}">
+      <div class="inc-head" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div>
+          <div><b>${ja(CAT_JA, i.diagnosis.category)}</b> → ${ja(ACT_JA, i.decision.action)}
+            <span class="muted">（${ja(OUT_JA, i.outcome)}）</span></div>
+          <div class="muted">${fmtTime(i.timestamp)}</div>
+        </div>
+        <span class="chev" style="color:var(--muted);font-size:12px">▸ 詳細</span>
+      </div>
+      <div class="inc-detail" style="display:none;margin-top:10px;border-top:1px dashed var(--line);padding-top:10px">${incidentDetailHTML(i)}</div>
+    </div>`;
+}
+
+function renderTimeline(incidents) {
+  const el = $("timeline");
+  const sig = incidents.map((i) => i.id + ":" + i.outcome).join(",");
+  if (sig === lastTimelineSig) return;   // 変化がなければ再描画しない（開いた詳細が閉じないように）
+  lastTimelineSig = sig;
+  el.innerHTML = incidents.length
+    ? incidents.map(incidentRowHTML).join("")
+    : '<span class="muted">まだインシデントはありません。</span>';
+  // 展開状態を復元
+  expanded.forEach((id) => {
+    const row = el.querySelector(`.inc[data-id="${id}"]`);
+    if (!row) return;
+    row.querySelector(".inc-detail").style.display = "block";
+    const ch = row.querySelector(".chev");
+    if (ch) ch.textContent = "▾ 閉じる";
+  });
 }
 
 function render(s) {
@@ -107,7 +173,10 @@ function render(s) {
   $("capacity").innerHTML = `<code>${mem}</code> / 最大 <code>${inst}</code>`;
   $("healthyRev").textContent = b.healthy_revision || "—";
   $("badRev").textContent = b.bad_revision || "—";
-  spark(b.history);
+  // グラフは毎ポーリングで現在のエラー率をサンプリング（自動巡回オフ・点検前でもスパイクが見える）。
+  clientHist.push(er);
+  if (clientHist.length > 40) clientHist.shift();
+  spark(clientHist);
 
   const inc = s.incidents[0];
   if (inc) {
@@ -125,12 +194,7 @@ function render(s) {
     $("agent").innerHTML = html;
   }
 
-  $("timeline").innerHTML = s.incidents.length
-    ? s.incidents.map((i) => `<div class="inc ${i.outcome || ""}">
-        <div><b>${ja(CAT_JA, i.diagnosis.category)}</b> → ${ja(ACT_JA, i.decision.action)}
-        <span class="muted">（${ja(OUT_JA, i.outcome)}）</span></div>
-        <div class="muted">${fmtTime(i.timestamp)}</div></div>`).join("")
-    : '<span class="muted">まだインシデントはありません。</span>';
+  renderTimeline(s.incidents);
 
   $("playbook").textContent = s.playbook || "（まだ学習データなし。インシデントを重ねると「この障害署名にはこの対応が効いた」が貯まり、次の診断に渡されます）";
   renderHeal(s);
@@ -142,7 +206,25 @@ $("inject").onclick = async () => { await api("/api/inject", "POST"); refresh();
 $("injectFeature").onclick = async () => { await api("/api/inject_feature", "POST"); refresh(); };
 $("injectOom").onclick = async () => { await api("/api/inject_oom", "POST"); refresh(); };
 $("injectTraffic").onclick = async () => { await api("/api/inject_traffic", "POST"); refresh(); };
-$("reset").onclick = async () => { await api("/api/reset", "POST"); refresh(); };
+$("reset").onclick = async () => {
+  await api("/api/reset", "POST");
+  clientHist = []; expanded.clear(); lastTimelineSig = "";   // グラフ・展開状態も初期化
+  refresh();
+};
+
+// タイムラインはクリックで詳細を開閉（イベント委譲＝再描画されても効き続ける）。
+$("timeline").addEventListener("click", (e) => {
+  const row = e.target.closest(".inc");
+  if (!row) return;
+  const id = row.getAttribute("data-id");
+  const detail = row.querySelector(".inc-detail");
+  const chev = row.querySelector(".chev");
+  if (!detail) return;
+  const open = detail.style.display !== "block";
+  detail.style.display = open ? "block" : "none";
+  if (chev) chev.textContent = open ? "▾ 閉じる" : "▸ 詳細";
+  if (open) expanded.add(id); else expanded.delete(id);
+});
 $("approveFix").onclick = async () => {
   const btn = $("approveFix");
   btn.disabled = true; btn.textContent = "🔧 デプロイ中…（検証まで実行）";
